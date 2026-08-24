@@ -222,6 +222,27 @@ def evaluate_fundamental_checklist(row: Any) -> Dict[str, Any]:
         items.append(
             _item("Interest Coverage", "N/A (Financial pack)", 0.0, 0, True, "Skipped for financial pack.")
         )
+
+        # P/B, not P/E, is the primary valuation lens for financials — book
+        # value is real, mark-to-market-ish capital for a lender, unlike an
+        # industrial's book value. This was silently never scored before:
+        # pb_ratio was computed correctly upstream (multi_source_data.py) but
+        # database_engine.upsert_leaderboard_rows() dropped it on every save,
+        # so any row read back from the DB (i.e. almost every real call site)
+        # saw it as missing. Fixed at the DB layer; this is the item that
+        # actually uses it now.
+        pb = _optional(row, "pb_ratio")
+        if pb is None or quality == "MISSING":
+            items.append(_item("P/B Ratio", "—", 0.0, 8, False, "Book value / P/B not available."))
+        elif pb <= 1.0:
+            items.append(_item("P/B Ratio", f"{pb:.2f}", 5.0, 8, True,
+                                "Trading below book — verify asset quality before treating as pure value."))
+        elif pb <= 2.5:
+            items.append(_item("P/B Ratio", f"{pb:.2f}", 8.0, 8, True, "Reasonable valuation for a quality lender."))
+        elif pb <= 4.0:
+            items.append(_item("P/B Ratio", f"{pb:.2f}", 4.0, 8, False, "Premium valuation — priced for sustained quality."))
+        else:
+            items.append(_item("P/B Ratio", f"{pb:.2f}", 1.0, 8, False, "Rich vs book value for a financial."))
     else:
         roic = _optional(row, "roic")
         metric_label = "ROCE / ROIC"

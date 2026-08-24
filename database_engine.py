@@ -577,6 +577,7 @@ def _ensure_leaderboard_extra_columns(cursor: sqlite3.Cursor) -> None:
     cols = set(_table_columns(cursor, "screener_leaderboard"))
     additions = {
         "pe_ratio": "REAL",
+        "pb_ratio": "REAL",
         "roe": "REAL",
         "data_quality": "TEXT",
         "fundamentals_verified": "INTEGER DEFAULT 0",
@@ -585,10 +586,31 @@ def _ensure_leaderboard_extra_columns(cursor: sqlite3.Cursor) -> None:
         "price_source": "TEXT",
         "price_kind": "TEXT",
         "prev_close": "REAL",
+        # 'IN' | 'US' — lets sector_engine.py (and eventually the US data
+        # provider) keep the two universes from mixing in one leaderboard.
+        # Defaults to 'IN' since every row written before this migration is
+        # India-only; nothing before this had any other market to be.
+        "market": "TEXT DEFAULT 'IN'",
     }
     for name, decl in additions.items():
         if name not in cols:
             cursor.execute(f"ALTER TABLE screener_leaderboard ADD COLUMN {name} {decl}")
+
+
+def _ensure_active_positions_extra_columns(cursor: sqlite3.Cursor) -> None:
+    """Additive migration for trailing-stop tracking (chandelier-style ratchet)."""
+    if not _table_exists(cursor, "active_positions"):
+        return
+    cols = set(_table_columns(cursor, "active_positions"))
+    additions = {
+        "atr_at_entry": "REAL",
+        "initial_stop_loss": "REAL",
+        "highest_price_since_entry": "REAL",
+        "trail_phase": "TEXT DEFAULT 'initial'",
+    }
+    for name, decl in additions.items():
+        if name not in cols:
+            cursor.execute(f"ALTER TABLE active_positions ADD COLUMN {name} {decl}")
 
 
 def init_database() -> bool:
@@ -675,6 +697,21 @@ def init_database() -> bool:
                     current_price REAL,
                     unrealized_pnl REAL DEFAULT 0.0,
                     FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
+                )
+                """
+            )
+            _ensure_active_positions_extra_columns(cursor)
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS sector_history (
+                    market TEXT NOT NULL,
+                    sector TEXT NOT NULL,
+                    as_of_date TEXT NOT NULL,
+                    median_pe REAL,
+                    median_peg REAL,
+                    median_composite_score REAL,
+                    constituent_count INTEGER,
+                    PRIMARY KEY (market, sector, as_of_date)
                 )
                 """
             )
@@ -1013,6 +1050,66 @@ def get_leaderboard_last_updated() -> Optional[datetime]:
         return None
 
 
+def snapshot_sector_history(market: str, rankings: List[Dict[str, Any]]) -> bool:
+    """One row per sector per day — idempotent (PRIMARY KEY on
+    market+sector+date), so calling this more than once on the same day just
+    overwrites that day's snapshot rather than duplicating it. This is the
+    only honest path to a real "cheap vs. its own history" verdict without a
+    paid feed or a bot-protected scrape: start recording today, own the
+    series going forward. See sector_engine.py and get_sector_pe_trend()."""
+    if not rankings:
+        return False
+    today = today_ist()
+    try:
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            for r in rankings:
+                cursor.execute(
+                    """
+                    INSERT INTO sector_history (
+                        market, sector, as_of_date, median_pe, median_peg,
+                        median_composite_score, constituent_count
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(market, sector, as_of_date) DO UPDATE SET
+                        median_pe=excluded.median_pe,
+                        median_peg=excluded.median_peg,
+                        median_composite_score=excluded.median_composite_score,
+                        constituent_count=excluded.constituent_count
+                    """,
+                    (
+                        market.upper(), r.get("sector"), today,
+                        r.get("median_pe"), r.get("median_peg"),
+                        r.get("median_composite_score"), r.get("constituent_count"),
+                    ),
+                )
+        return True
+    except Exception as exc:
+        logger.error("snapshot_sector_history failed: %s", exc)
+        return False
+
+
+def get_sector_pe_history(market: str, sector: str, limit_days: int = 365) -> pd.DataFrame:
+    """Ascending-date history for one sector — empty until snapshot_sector_history()
+    has been running for a while. No backfill exists; this only has what's
+    been recorded since the feature shipped."""
+    try:
+        with get_connection() as conn:
+            return pd.read_sql_query(
+                """
+                SELECT as_of_date, median_pe, median_peg, median_composite_score, constituent_count
+                FROM sector_history
+                WHERE market = ? AND sector = ?
+                ORDER BY as_of_date DESC
+                LIMIT ?
+                """,
+                conn,
+                params=(market.upper(), sector, limit_days),
+            ).iloc[::-1].reset_index(drop=True)
+    except Exception as exc:
+        logger.error("get_sector_pe_history failed: %s", exc)
+        return pd.DataFrame()
+
+
 def upsert_leaderboard_rows(rows: List[Dict[str, Any]]) -> bool:
     if not rows:
         return False
@@ -1043,9 +1140,9 @@ def upsert_leaderboard_rows(rows: List[Dict[str, Any]]) -> bool:
                         roic, net_debt_ebitda, peg_ratio, interest_coverage,
                         promoter_pledge_pct, yoy_profit_growth, sma_50, sma_200,
                         rsi_14, delivery_pct_10d, alpha_3m,
-                        pe_ratio, roe, data_quality, fundamentals_verified, sources_ok_count,
-                        ohlcv_ready, price_source, price_kind, prev_close
-                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                        pe_ratio, pb_ratio, roe, data_quality, fundamentals_verified, sources_ok_count,
+                        ohlcv_ready, price_source, price_kind, prev_close, market
+                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                     ON CONFLICT(ticker) DO UPDATE SET
                         company_name=excluded.company_name,
                         description=excluded.description,
@@ -1070,6 +1167,7 @@ def upsert_leaderboard_rows(rows: List[Dict[str, Any]]) -> bool:
                         delivery_pct_10d=excluded.delivery_pct_10d,
                         alpha_3m=excluded.alpha_3m,
                         pe_ratio=excluded.pe_ratio,
+                        pb_ratio=excluded.pb_ratio,
                         roe=excluded.roe,
                         data_quality=excluded.data_quality,
                         fundamentals_verified=excluded.fundamentals_verified,
@@ -1077,7 +1175,8 @@ def upsert_leaderboard_rows(rows: List[Dict[str, Any]]) -> bool:
                         ohlcv_ready=excluded.ohlcv_ready,
                         price_source=COALESCE(excluded.price_source, screener_leaderboard.price_source),
                         price_kind=COALESCE(excluded.price_kind, screener_leaderboard.price_kind),
-                        prev_close=COALESCE(excluded.prev_close, screener_leaderboard.prev_close)
+                        prev_close=COALESCE(excluded.prev_close, screener_leaderboard.prev_close),
+                        market=excluded.market
                     """,
                     (
                         row["ticker"], row.get("company_name", row["ticker"]),
@@ -1092,6 +1191,7 @@ def upsert_leaderboard_rows(rows: List[Dict[str, Any]]) -> bool:
                         row.get("rsi_14", 50.0), row.get("delivery_pct_10d", 0.0),
                         row.get("alpha_3m", 0.0),
                         row.get("pe_ratio"),
+                        row.get("pb_ratio"),
                         row.get("roe"),
                         quality,
                         verified,
@@ -1100,6 +1200,7 @@ def upsert_leaderboard_rows(rows: List[Dict[str, Any]]) -> bool:
                         price_source,
                         price_kind,
                         prev_close,
+                        str(row.get("market") or "IN").upper(),
                     ),
                 )
         return True
@@ -1177,7 +1278,8 @@ def get_active_positions(user_id: int) -> pd.DataFrame:
             return pd.read_sql_query(
                 """
                 SELECT position_id, user_id, ticker, entry_timestamp, entry_price,
-                       stop_loss, target, quantity, current_price, unrealized_pnl
+                       stop_loss, target, quantity, current_price, unrealized_pnl,
+                       atr_at_entry, initial_stop_loss, highest_price_since_entry, trail_phase
                 FROM active_positions
                 WHERE user_id = ?
                 ORDER BY entry_timestamp DESC
@@ -1217,8 +1319,16 @@ def open_signal(
     entry_price: float,
     stop_loss: float,
     target: float,
+    atr: Optional[float] = None,
 ) -> Tuple[bool, str]:
-    """Open a forward-test signal at fixed Quantity = 1. Capital is irrelevant."""
+    """Open a forward-test signal at fixed Quantity = 1. Capital is irrelevant.
+
+    ``atr`` (ATR at entry) seeds the chandelier-style trailing stop that
+    validate_active_signals() ratchets up on every refresh — see
+    data_pipeline.compute_trailing_stop(). Optional and defaults to None for
+    callers that predate the trailing-stop redesign; those positions simply
+    keep their fixed initial stop (no ratcheting) until re-opened with an ATR.
+    """
     try:
         with get_connection() as conn:
             cursor = conn.cursor()
@@ -1237,8 +1347,9 @@ def open_signal(
                 """
                 INSERT INTO active_positions (
                     user_id, ticker, entry_timestamp, entry_price, stop_loss, target,
-                    quantity, current_price, unrealized_pnl
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0.0)
+                    quantity, current_price, unrealized_pnl,
+                    atr_at_entry, initial_stop_loss, highest_price_since_entry, trail_phase
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0.0, ?, ?, ?, 'initial')
                 """,
                 (
                     user_id,
@@ -1248,6 +1359,9 @@ def open_signal(
                     float(stop_loss),
                     float(target),
                     FIXED_QUANTITY,
+                    float(entry_price),
+                    float(atr) if atr is not None else None,
+                    float(stop_loss),
                     float(entry_price),
                 ),
             )
@@ -1329,6 +1443,29 @@ def update_position_mark(position_id: int, current_price: float, unrealized_pnl:
         return True
     except Exception as exc:
         logger.error("update_position_mark failed: %s", exc)
+        return False
+
+
+def update_position_trailing(
+    position_id: int, highest_price: float, stop_loss: float, trail_phase: str
+) -> bool:
+    """Persist the ratcheted chandelier stop. Called every refresh from
+    data_pipeline.validate_active_signals() — stop_loss only ever moves up
+    for a long, never down (see compute_trailing_stop())."""
+    try:
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                UPDATE active_positions
+                SET highest_price_since_entry = ?, stop_loss = ?, trail_phase = ?
+                WHERE position_id = ?
+                """,
+                (highest_price, stop_loss, trail_phase, position_id),
+            )
+        return True
+    except Exception as exc:
+        logger.error("update_position_trailing failed: %s", exc)
         return False
 
 

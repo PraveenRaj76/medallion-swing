@@ -267,17 +267,27 @@ def _nse_session():
 
 
 def _nse_pledge(symbol: str, session: Any) -> Dict[str, Optional[float]]:
-    """Promoter pledge % straight from NSE's SAST encumbrance disclosure."""
-    body = _json_body(
-        _get(
-            f"{NSE_BASE}/api/corporate-pledgedata?index=equities&symbol={symbol}",
-            NSE_REFERER,
-            session=session,
-        )
+    """Promoter pledge % straight from NSE's SAST encumbrance disclosure.
+
+    `queried_ok` distinguishes "the API call itself worked and returned zero
+    pledge rows" from "the call failed/was blocked" — those mean very
+    different things to a caller: the former is a real "nothing pledged"
+    signal (SEBI SAST requires prompt disclosure, so regulatory silence is
+    informative), the latter is just missing data and must not be read as
+    a clean bill of health.
+    """
+    resp = _get(
+        f"{NSE_BASE}/api/corporate-pledgedata?index=equities&symbol={symbol}",
+        NSE_REFERER,
+        session=session,
     )
-    out: Dict[str, Optional[float]] = {"promoter_pledge_pct": None, "promoter_holding_pct": None}
+    out: Dict[str, Any] = {"promoter_pledge_pct": None, "promoter_holding_pct": None, "queried_ok": False}
+    if resp is None or getattr(resp, "status_code", 0) != 200:
+        return out
+    body = _json_body(resp)
     if not isinstance(body, dict):
         return out
+    out["queried_ok"] = True
     rows = body.get("data")
     if not isinstance(rows, list) or not rows:
         return out
@@ -320,8 +330,17 @@ def fetch_nse_filings(ticker: str) -> Dict[str, Any]:
         out["promoter_pledge_pct"] = pledge["promoter_pledge_pct"]
         if out.get("promoter_holding_pct") is None:
             out["promoter_holding_pct"] = pledge["promoter_holding_pct"]
-    elif out.get("promoter_holding_pct") == 0:
-        # No promoter block on record — nothing can be pledged
+    elif pledge.get("queried_ok"):
+        # NSE's corporate-pledgedata is the SEBI SAST-mandated disclosure —
+        # promoters must report pledges promptly, so a QUERY THAT ACTUALLY
+        # SUCCEEDED and came back with zero rows means "nothing currently
+        # pledged," not "we don't know." Gated on queried_ok specifically
+        # (not just holdings ok) so a blocked/failed pledge call is never
+        # misread as a clean result. Previously this only inferred 0% when
+        # promoter_holding_pct was itself 0 (no promoter block at all), which
+        # left large, legitimately clean holders like RELIANCE/TCS reading as
+        # unverified in the checklist — scored as if the data had failed,
+        # when the regulatory silence was itself the (positive) signal.
         out["promoter_pledge_pct"] = 0.0
 
     _cache_put(cache_key, out)

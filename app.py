@@ -10,7 +10,7 @@ import logging
 import os
 import re
 import time
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -186,14 +186,20 @@ def execute_algorithmic_buy(
     stop_loss: float,
     target: float,
     source_page: str,
+    atr: Optional[float] = None,
 ) -> Tuple[bool, str]:
-    """Always opens exactly 1 share — no capital / risk sizing."""
+    """Always opens exactly 1 share — no capital / risk sizing.
+
+    ``atr`` seeds the chandelier trailing stop (data_pipeline.compute_trailing_stop)
+    that ratchets on every refresh instead of the old fixed-target auto-close.
+    """
     ok, message = db.open_signal(
         user_id=user_id,
         ticker=ticker,
         entry_price=float(entry_price),
         stop_loss=float(stop_loss),
         target=float(target),
+        atr=float(atr) if atr is not None else None,
     )
     if ok:
         try:
@@ -501,6 +507,7 @@ def _render_buy_panel(user_id: int, row: pd.Series, source_page: str, prefix: st
             stop_loss=levels["stop_loss"],
             target=levels["target"],
             source_page=source_page,
+            atr=atr,
         )
         if ok:
             st.success(message)

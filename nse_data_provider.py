@@ -751,6 +751,7 @@ def build_live_row(
         "promoter_pledge_pct": pick_optional("promoter_pledge_pct"),
         "yoy_profit_growth": pick_optional("yoy_profit_growth"),
         "pe_ratio": pick_optional("pe_ratio"),
+        "pb_ratio": pick_optional("pb_ratio"),
         "promoter_holding_pct": fund.get("promoter_holding_pct"),
         "fundamentals_verified": verified,
         "data_quality": quality,

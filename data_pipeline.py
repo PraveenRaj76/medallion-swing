@@ -25,6 +25,32 @@ FUNDAMENTAL_REFRESH_HOURS = 24
 RSI_OVERBOUGHT = 65.0
 FIXED_QUANTITY = 1
 
+# Trailing-stop design (chandelier exit, Chuck LeBeau): trail = highest high
+# since entry - multiplier x ATR. Wider (3x) before the original target is
+# reached so a normal pullback doesn't shake the trade out early; tighter
+# (2x) once price has proven the trend by reaching target, to lock in more
+# of the gain while still letting a genuine trend run past the fixed target
+# instead of force-closing there. The stop only ever ratchets up, never down.
+CHANDELIER_MULTIPLIER_INITIAL = 3.0
+CHANDELIER_MULTIPLIER_RUNNER = 2.0
+# Informational only (does not change FIXED_QUANTITY=1 forward-test sizing) —
+# what a real position would size to at 1% account risk, Turtle/Zerodha-Varsity
+# convention. Override via MEDALLION_CAPITAL_BASE.
+DEFAULT_CAPITAL_BASE = float(os.environ.get("MEDALLION_CAPITAL_BASE", "25000"))
+RISK_PCT_PER_TRADE = 0.01
+
+# BUY signal confluence gate (Decision Engine Blueprint 1.1). Starting
+# numbers, not final — flagged in the blueprint as needing sign-off before
+# they gate real signals. A composite score alone is a weak gate: it lets a
+# pure-momentum name with no fundamental backing qualify, or a fundamentally
+# sound name at a terrible entry qualify too. Every gate below must pass
+# simultaneously.
+BUY_COMPOSITE_FLOOR_PCT = float(os.environ.get("MEDALLION_BUY_COMPOSITE_FLOOR_PCT", "65"))
+BUY_FUNDAMENTAL_FLOOR_PCT = float(os.environ.get("MEDALLION_BUY_FUNDAMENTAL_FLOOR_PCT", "50"))
+BUY_PE_PEER_PERCENTILE_MAX = float(os.environ.get("MEDALLION_BUY_PE_PEER_PERCENTILE_MAX", "60"))
+BUY_PEG_MAX = float(os.environ.get("MEDALLION_BUY_PEG_MAX", "2.0"))
+MAX_CONCURRENT_POSITIONS = int(os.environ.get("MEDALLION_MAX_CONCURRENT_POSITIONS", "5"))
+
 
 def should_skip_heavy_sync() -> Tuple[bool, Optional[datetime]]:
     last_updated = db.get_leaderboard_last_updated()
@@ -202,9 +228,17 @@ def ensure_ticker_live(
 
 def validate_active_signals(user_id: int) -> List[Dict[str, Any]]:
     """
-    Clearance loop: mark 1-share signals to market and auto-close on target/stop.
-    Target hit  -> SUCCESSFUL TRADE
-    Stop hit    -> BAD TRADE
+    Clearance loop: mark 1-share signals to market and ratchet a chandelier
+    trailing stop (see compute_trailing_stop) every cycle.
+
+    There is no separate "hit target -> auto-close" branch anymore — reaching
+    the original target only tightens the trail (3x ATR -> 2x ATR) instead of
+    forcing an exit, so a genuine trend isn't capped at a fixed R:R (this was
+    the main finding from the cross-market checklist review: a fixed target
+    fights the trend-following premise of the technical checklist). The
+    position closes only when price actually trades through the current
+    trailing stop. Whether that's a win or a loss is decided by where the
+    stop ended up relative to entry, not by which fixed level was crossed.
     """
     clearances: List[Dict[str, Any]] = []
     try:
@@ -218,9 +252,12 @@ def validate_active_signals(user_id: int) -> List[Dict[str, Any]]:
             position_id = int(pos["position_id"])
             ticker = str(pos["ticker"]).upper()
             entry_price = float(pos["entry_price"])
-            stop_loss = float(pos["stop_loss"])
             target = float(pos["target"])
             quantity = int(pos.get("quantity") or FIXED_QUANTITY)
+            initial_stop = float(pos.get("initial_stop_loss") or pos["stop_loss"])
+            highest_price_since_entry = float(pos.get("highest_price_since_entry") or entry_price)
+            trail_phase = str(pos.get("trail_phase") or "initial")
+            atr_at_entry = pos.get("atr_at_entry")
 
             market = db.get_ticker_row(ticker)
             if market is None and nse.is_live_mode():
@@ -228,17 +265,36 @@ def validate_active_signals(user_id: int) -> List[Dict[str, Any]]:
 
             if market is not None:
                 current_price = float(market.get("close_price", entry_price))
+                atr_current = _num(market, "atr_value") or (
+                    float(atr_at_entry) if atr_at_entry is not None else None
+                )
             else:
                 current_price = float(pos.get("current_price") or entry_price)
+                atr_current = float(atr_at_entry) if atr_at_entry is not None else None
 
             unrealized = (current_price - entry_price) * quantity
             db.update_position_mark(position_id, current_price, unrealized)
 
+            trail = compute_trailing_stop(
+                entry_price=entry_price,
+                initial_stop=initial_stop,
+                atr_current=atr_current or 0.0,
+                highest_price_since_entry=highest_price_since_entry,
+                current_price=current_price,
+                target=target,
+                trail_phase=trail_phase,
+            )
+            stop_loss = trail["stop_loss"]
+            db.update_position_trailing(
+                position_id, trail["highest_price_since_entry"], stop_loss, trail["trail_phase"]
+            )
+
             exit_status = None
-            if current_price >= target:
-                exit_status = db.EXIT_SUCCESS
-            elif current_price <= stop_loss:
-                exit_status = db.EXIT_BAD
+            if current_price <= stop_loss:
+                # Win if the ratcheted stop locked in a price at/above entry;
+                # a genuine loss only if it's still below entry (stop never
+                # loosens, so this only happens before the trail has caught up).
+                exit_status = db.EXIT_SUCCESS if stop_loss >= entry_price else db.EXIT_BAD
 
             if exit_status:
                 ok, message, pnl = db.close_signal(
@@ -1334,12 +1390,102 @@ def check_buyability(row: pd.Series) -> Tuple[bool, str]:
     return True, "SIGNAL CLEAR: Passes 200 SMA / RSI filters."
 
 
+def evaluate_buy_signal(row: Dict[str, Any], scorecard: Dict[str, Any], user_id: int) -> Dict[str, Any]:
+    """Multi-gate BUY confluence check (Decision Engine Blueprint 1.1).
+
+    `row` is a leaderboard/live row (dict or Series); `scorecard` is
+    factor_engine.full_factor_scorecard(row) — this function doesn't score
+    anything itself, it just gates on scores/data already computed elsewhere.
+    Every gate must pass; there is no partial-credit BUY. Returns the full
+    per-gate breakdown, not just the verdict, so a caller (or a UI) can show
+    exactly which condition blocked a signal instead of a bare yes/no.
+    """
+    ticker = str(row.get("ticker", "")).upper()
+
+    quality = str(row.get("data_quality") or "MISSING").upper()
+    gates = [
+        {
+            "gate": "data_quality",
+            "passed": quality in ("SOURCED", "CACHED"),
+            "detail": quality,
+        }
+    ]
+
+    composite_pct = float(scorecard.get("composite_pct") or 0.0)
+    gates.append({
+        "gate": "composite_floor",
+        "passed": composite_pct >= BUY_COMPOSITE_FLOOR_PCT,
+        "detail": f"{composite_pct}% (floor {BUY_COMPOSITE_FLOOR_PCT}%)",
+    })
+
+    fund_pct = float((scorecard.get("fundamental") or {}).get("pct") or 0.0)
+    gates.append({
+        "gate": "fundamental_floor",
+        "passed": fund_pct >= BUY_FUNDAMENTAL_FLOOR_PCT,
+        "detail": f"{fund_pct}% (floor {BUY_FUNDAMENTAL_FLOOR_PCT}%)",
+    })
+
+    close = float(row.get("close_price") or 0.0)
+    sma_200 = float(row.get("sma_200") or 0.0)
+    rsi_14 = float(row.get("rsi_14") or 50.0)
+    trend_ok = close > sma_200 and rsi_14 <= RSI_OVERBOUGHT
+    gates.append({
+        "gate": "technical_trend",
+        "passed": trend_ok,
+        "detail": f"close={close:.2f} vs 200SMA={sma_200:.2f}, RSI={rsi_14:.1f}",
+    })
+
+    pe_pctl = row.get("pe_peer_percentile")
+    peg = row.get("peg_ratio")
+    pe_pctl_f = float(pe_pctl) if pe_pctl is not None else None
+    peg_f = float(peg) if peg is not None else None
+    valuation_ok = (pe_pctl_f is not None and pe_pctl_f <= BUY_PE_PEER_PERCENTILE_MAX) or (
+        peg_f is not None and peg_f <= BUY_PEG_MAX
+    )
+    gates.append({
+        "gate": "relative_valuation",
+        "passed": valuation_ok,
+        "detail": f"PE percentile={pe_pctl_f}, PEG={peg_f}",
+    })
+
+    active = db.get_active_positions(user_id)
+    open_count = 0 if active is None or active.empty else len(active)
+    already_open = bool(
+        active is not None and not active.empty
+        and ticker in set(active["ticker"].astype(str).str.upper())
+    )
+    gates.append({
+        "gate": "position_budget",
+        "passed": (not already_open) and open_count < MAX_CONCURRENT_POSITIONS,
+        "detail": f"{open_count}/{MAX_CONCURRENT_POSITIONS} open, already_open={already_open}",
+    })
+
+    all_passed = all(g["passed"] for g in gates)
+    return {
+        "ticker": ticker,
+        "signal": "BUY" if all_passed else "NO_SIGNAL",
+        "gates": gates,
+        "blocked_by": [g["gate"] for g in gates if not g["passed"]],
+    }
+
+
 def build_trade_levels(close_price: float, atr: float) -> Dict[str, float]:
+    """Initial stop/target only — see compute_trailing_stop() for what
+    actually manages the position after entry. 2.5x ATR sits at the upper
+    edge of the well-documented 1.5-2.5x swing-trade band (Turtle system
+    uses 2N = 2x); kept as-is, it's defensible. The 6.0x target is no longer
+    a forced exit (see validate_active_signals) — it's the level that flips
+    the trailing stop from its wider 3x-ATR "initial" band to a tighter
+    2x-ATR "runner" band, so a genuine trend isn't capped at a fixed R:R.
+    """
     stop_loss = close_price - (2.5 * atr)
     target = close_price + (6.0 * atr)
     risk = close_price - stop_loss
     reward = target - close_price
     rrr = (reward / risk) if risk > 0 else 0.0
+    recommended_quantity = (
+        math.floor((DEFAULT_CAPITAL_BASE * RISK_PCT_PER_TRADE) / risk) if risk > 0 else 0
+    )
     return {
         "stop_loss": round(stop_loss, 2),
         "target": round(target, 2),
@@ -1347,6 +1493,39 @@ def build_trade_levels(close_price: float, atr: float) -> Dict[str, float]:
         "reward": round(reward, 2),
         "rrr": round(rrr, 2),
         "quantity": FIXED_QUANTITY,
+        "recommended_quantity_at_1pct_risk": recommended_quantity,
+    }
+
+
+def compute_trailing_stop(
+    entry_price: float,
+    initial_stop: float,
+    atr_current: float,
+    highest_price_since_entry: float,
+    current_price: float,
+    target: float,
+    trail_phase: str = "initial",
+) -> Dict[str, Any]:
+    """Chandelier-style ratcheting stop layered on the fixed initial stop.
+
+    Never loosens: the effective stop is always max(initial_stop, trail).
+    Once the high-water mark has ever reached the original target, phase
+    flips to 'runner' and the trail tightens from 3x to 2x ATR — this is
+    what replaces the old "hit target -> force close" behaviour, so a
+    trend-following checklist isn't fighting its own fixed-target exit.
+    """
+    highest = max(float(highest_price_since_entry or entry_price), float(current_price))
+    phase = "runner" if (trail_phase == "runner" or highest >= target) else "initial"
+    multiplier = CHANDELIER_MULTIPLIER_RUNNER if phase == "runner" else CHANDELIER_MULTIPLIER_INITIAL
+    if atr_current and atr_current > 0:
+        trailing_stop = highest - (multiplier * atr_current)
+    else:
+        trailing_stop = initial_stop
+    effective_stop = max(float(initial_stop), trailing_stop)
+    return {
+        "highest_price_since_entry": round(highest, 2),
+        "stop_loss": round(effective_stop, 2),
+        "trail_phase": phase,
     }
 
 
@@ -1438,6 +1617,48 @@ def enrich_closed_trade_row(row: pd.Series) -> Dict[str, Any]:
     }
 
 
+def _wilson_interval(successes: int, n: int, z: float = 1.96) -> Tuple[float, float]:
+    """95% Wilson score interval on a win rate, in percent. A raw win rate
+    with no interval is a misleading number at forward-test sample sizes —
+    see Decision Engine Blueprint 1.3. Returns (0, 0) for n=0."""
+    if n <= 0:
+        return (0.0, 0.0)
+    phat = successes / n
+    denom = 1 + z * z / n
+    center = phat + z * z / (2 * n)
+    margin = z * math.sqrt(phat * (1 - phat) / n + z * z / (4 * n * n))
+    lower = max(0.0, (center - margin) / denom)
+    upper = min(1.0, (center + margin) / denom)
+    return (round(lower * 100, 1), round(upper * 100, 1))
+
+
+def _equity_curve_max_drawdown(trade_rows: List[Dict[str, Any]]) -> Dict[str, Optional[float]]:
+    """Walks closed trades in exit order, tracks the running cumulative P&L
+    peak, and returns the worst peak-to-trough drop. This is the number that
+    actually answers "can I survive running this strategy live" — the
+    scorecard previously only had aggregate totals, no running curve."""
+    dated = [
+        t for t in trade_rows
+        if t.get("exit_timestamp") and t.get("absolute_delta") is not None
+    ]
+    dated.sort(key=lambda t: str(t["exit_timestamp"]))
+    if not dated:
+        return {"max_drawdown_rupee": None, "max_drawdown_pct": None}
+
+    cumulative = 0.0
+    peak = 0.0
+    max_dd = 0.0
+    max_dd_pct = 0.0
+    for t in dated:
+        cumulative += float(t["absolute_delta"])
+        peak = max(peak, cumulative)
+        drawdown = peak - cumulative
+        max_dd = max(max_dd, drawdown)
+        if peak > 0:
+            max_dd_pct = max(max_dd_pct, drawdown / peak * 100)
+    return {"max_drawdown_rupee": round(max_dd, 2), "max_drawdown_pct": round(max_dd_pct, 1)}
+
+
 def compute_forward_test_scorecard(user_id: int) -> Dict[str, Any]:
     closed = db.get_closed_trades(user_id)
     active = db.get_active_positions(user_id)
@@ -1492,9 +1713,18 @@ def compute_forward_test_scorecard(user_id: int) -> Dict[str, Any]:
                 pass
 
     win_rate = (successful / total * 100.0) if total > 0 else 0.0
+    win_rate_ci = _wilson_interval(successful, total)
     avg_hold = round(sum(hold_days) / len(hold_days), 1) if hold_days else None
     expectancy = round(total_rupee / total, 2) if total > 0 else 0.0
     open_n = 0 if active is None or active.empty else len(active[active["user_id"] == user_id]) if "user_id" in active.columns else len(active)
+
+    gross_wins = sum(float(t["absolute_delta"]) for t in trade_rows if float(t.get("absolute_delta") or 0) > 0)
+    gross_losses = abs(sum(float(t["absolute_delta"]) for t in trade_rows if float(t.get("absolute_delta") or 0) < 0))
+    # None (not Infinity) when there are wins and zero losses yet — "undefined
+    # so far", not a JSON-illegal float. A JSON encoder would happily emit
+    # literal `Infinity` here, which isn't valid JSON for any strict parser.
+    profit_factor = round(gross_wins / gross_losses, 2) if gross_losses > 0 else None
+    drawdown = _equity_curve_max_drawdown(trade_rows)
 
     # Score-bucket style placeholder using % return terciles of closed trades
     buckets = {"high_return": 0, "mid_return": 0, "low_return": 0}
@@ -1518,8 +1748,12 @@ def compute_forward_test_scorecard(user_id: int) -> Dict[str, Any]:
         "bad_trades": bad,
         "open_signals": open_n,
         "win_rate_pct": round(win_rate, 2),
+        "win_rate_ci_95": {"low": win_rate_ci[0], "high": win_rate_ci[1]},
         "total_realized_rupee_return": round(total_rupee, 2),
         "expectancy_rupee": expectancy,
+        "profit_factor": profit_factor,
+        "max_drawdown_rupee": drawdown["max_drawdown_rupee"],
+        "max_drawdown_pct": drawdown["max_drawdown_pct"],
         "avg_hold_days": avg_hold,
         "velocity_buckets": velocity_buckets,
         "return_buckets": buckets,

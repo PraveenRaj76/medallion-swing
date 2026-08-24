@@ -173,6 +173,7 @@ def main() -> int:
             levels["stop_loss"],
             levels["target"],
             appmod.PAGE_SCREENER,
+            atr=float(row["atr_value"]),
         )
         pos = db.get_active_positions(uid_a)
         tcs = pos[pos["ticker"] == "TCS"]
@@ -369,27 +370,55 @@ def main() -> int:
         sync = pipe.sync_user_and_screener_data(uid_a)
         log("Landing sync runs", "message" in sync and "clearances" in sync, sync.get("message", "")[:80])
 
-        # Force successful target hit on TCS
+        # Trailing-stop redesign (see data_pipeline.compute_trailing_stop): hitting
+        # target no longer force-closes — it only tightens the chandelier trail from
+        # 3x to 2x ATR, so a genuine trend can run past the fixed target instead of
+        # being capped there. Verify both halves: (a) target alone does NOT close,
+        # it flips the position into "runner" phase with a ratcheted-up stop; then
+        # (b) pulling back through that new, tighter trailing stop DOES close it,
+        # and correctly as a WIN since the stop is above entry.
         pos = db.get_active_positions(uid_a)
         tcs = pos[pos["ticker"] == "TCS"].iloc[0]
         pid = int(tcs["position_id"])
+        entry_price = float(tcs["entry_price"])
+        atr_at_entry = (
+            float(tcs["atr_at_entry"])
+            if tcs.get("atr_at_entry") is not None
+            else float(db.get_ticker_row("TCS")["atr_value"])
+        )
         with db.get_connection() as conn:
             conn.execute(
                 "UPDATE active_positions SET entry_timestamp=? WHERE position_id=?",
                 ((datetime.utcnow() - timedelta(days=5)).strftime("%Y-%m-%d %H:%M:%S"), pid),
             )
-        # Push market quote above target by upserting leaderboard close
+        # Push market quote well above target — should tighten the trail, not close.
         target = float(tcs["target"])
         db.upsert_leaderboard_rows([{
             **db.get_ticker_row("TCS").to_dict(),
-            "close_price": target + 5.0,
+            "close_price": target + 2 * atr_at_entry,
             "is_buyable": 1,
+        }])
+        clearances = pipe.validate_active_signals(uid_a)
+        pos = db.get_active_positions(uid_a)
+        tcs_row = pos[pos["ticker"] == "TCS"]
+        log(
+            "Nav/validate: target hit alone does NOT close — tightens trail to 'runner' phase",
+            not tcs_row.empty and tcs_row.iloc[0]["trail_phase"] == "runner"
+            and not any(c.get("ticker") == "TCS" for c in clearances),
+            f"clearances={len(clearances)}",
+        )
+        # Now pull back through the new, tighter trailing stop — should close as a WIN.
+        new_stop = float(tcs_row.iloc[0]["stop_loss"])
+        db.upsert_leaderboard_rows([{
+            **db.get_ticker_row("TCS").to_dict(),
+            "close_price": new_stop - 1.0,
+            "is_buyable": 0,
         }])
         clearances = pipe.validate_active_signals(uid_a)
         cleared_tcs = any(c.get("ticker") == "TCS" and c.get("exit_status") == db.EXIT_SUCCESS for c in clearances)
         still = db.get_active_positions(uid_a)
         log(
-            "Nav/validate: target hit → SUCCESSFUL TRADE + removed from active",
+            "Nav/validate: pullback through tightened trail → SUCCESSFUL TRADE + removed from active",
             cleared_tcs and (still.empty or "TCS" not in set(still["ticker"].astype(str))),
             f"clearances={len(clearances)}",
         )
