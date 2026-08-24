@@ -21,6 +21,7 @@ import logging
 import os
 import threading
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -295,6 +296,87 @@ def _nse_pledge(symbol: str, session: Any) -> Dict[str, Optional[float]]:
     out["promoter_pledge_pct"] = _num(latest.get("percSharesPledged"))
     out["promoter_holding_pct"] = _num(latest.get("percPromoterHolding"))
     return out
+
+
+_bhavcopy_lock = threading.Lock()
+_bhavcopy_cache: Dict[str, Dict[str, float]] = {}
+
+
+def _bhavcopy_delivery_map(date_str: str, session: Any) -> Dict[str, float]:
+    """One trading day's real DELIV_PER for every NSE equity, straight from
+    NSE's own daily bhavcopy archive (sec_bhavdata_full) — the official
+    security-wise delivery-quantity disclosure, not an approximation.
+    Cached per date since a past day's bhavcopy never changes and one fetch
+    covers every ticker in a screening run, not just one."""
+    with _bhavcopy_lock:
+        cached = _bhavcopy_cache.get(date_str)
+    if cached is not None:
+        return cached
+    resp = _get(
+        f"https://archives.nseindia.com/products/content/sec_bhavdata_full_{date_str}.csv",
+        f"{NSE_BASE}/all-reports",
+        session=session,
+    )
+    out: Dict[str, float] = {}
+    if resp is not None and getattr(resp, "status_code", 0) == 200 and resp.text:
+        lines = resp.text.splitlines()
+        if lines:
+            header = [h.strip() for h in lines[0].split(",")]
+            try:
+                sym_i = header.index("SYMBOL")
+                series_i = header.index("SERIES")
+                deliv_i = header.index("DELIV_PER")
+            except ValueError:
+                sym_i = series_i = deliv_i = -1
+            if sym_i >= 0:
+                for line in lines[1:]:
+                    parts = [p.strip() for p in line.split(",")]
+                    if len(parts) <= max(sym_i, series_i, deliv_i):
+                        continue
+                    if parts[series_i] != "EQ":
+                        continue
+                    val = _num(parts[deliv_i])
+                    if val is not None:
+                        out[parts[sym_i]] = val
+    with _bhavcopy_lock:
+        _bhavcopy_cache[date_str] = out
+    return out
+
+
+def fetch_nse_delivery_pct_10d(symbol: str) -> Optional[float]:
+    """Real 10-trading-day average delivery percentage for one ticker,
+    straight from NSE's own daily bhavcopy archive (DELIV_PER) — replaces
+    the volume-z-score approximation this project previously used as a
+    stand-in when delivery data was believed unavailable free. Walks back
+    from yesterday (a day's bhavcopy isn't published until evening),
+    skipping weekends, and simply skips any day the archive doesn't have
+    (holiday, outage) rather than inventing a value for it. Returns None —
+    not a guessed default — if fewer than 1 real trading day was found in
+    the scan window, e.g. a newly-listed stock or a blocked request.
+    """
+    symbol = (symbol or "").strip().upper()
+    if not symbol:
+        return None
+    cache_key = f"delivpct:{symbol}"
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached[0] if isinstance(cached, tuple) else cached
+
+    session = _nse_session()
+    values: List[float] = []
+    day = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30) - timedelta(days=1)
+    scanned = 0
+    while len(values) < 10 and scanned < 30:
+        scanned += 1
+        if day.weekday() < 5:
+            day_map = _bhavcopy_delivery_map(day.strftime("%d%m%Y"), session)
+            if symbol in day_map:
+                values.append(day_map[symbol])
+        day -= timedelta(days=1)
+
+    result = round(sum(values) / len(values), 1) if values else None
+    _cache_put(cache_key, result)
+    return result
 
 
 def fetch_nse_filings(ticker: str) -> Dict[str, Any]:

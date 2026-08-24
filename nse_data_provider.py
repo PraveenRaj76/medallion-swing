@@ -386,7 +386,9 @@ def _sma(closes: pd.Series, period: int) -> float:
     return round(float(closes.tail(period).mean()), 2)
 
 
-def compute_technicals(frame: pd.DataFrame, bench_frame: Optional[pd.DataFrame] = None) -> Dict[str, float]:
+def compute_technicals(
+    frame: pd.DataFrame, bench_frame: Optional[pd.DataFrame] = None, ticker: Optional[str] = None
+) -> Dict[str, Optional[float]]:
     closes = frame["close"].astype(float)
     close = float(closes.iloc[-1])
     sma_50 = _sma(closes, 50)
@@ -405,15 +407,21 @@ def compute_technicals(frame: pd.DataFrame, bench_frame: Optional[pd.DataFrame] 
         else:
             alpha_3m = round(stock_ret, 2)
 
-    # Delivery % is not on Yahoo; approximate institutional interest via volume z-score → 30–70 band
-    volumes = frame["volume"].astype(float).fillna(0.0)
-    if len(volumes) >= 20 and float(volumes.tail(20).mean()) > 0:
-        z = (float(volumes.iloc[-1]) - float(volumes.tail(20).mean())) / max(
-            float(volumes.tail(20).std(ddof=0)), 1.0
-        )
-        delivery_pct = float(np.clip(45.0 + z * 6.0, 25.0, 75.0))
-    else:
-        delivery_pct = 45.0
+    # Real 10-trading-day average delivery %, straight from NSE's own daily
+    # bhavcopy archive (DELIV_PER) — see free_extra_sources.fetch_nse_delivery_pct_10d.
+    # Not on Yahoo, so this used to be approximated from a volume z-score;
+    # that fabricated a plausible-looking number instead of reporting the
+    # real one, which NSE actually publishes free. None here means the real
+    # fetch genuinely came back empty (no ticker, blocked, newly listed) —
+    # left None rather than guessed, same as interest_coverage upstream.
+    delivery_pct: Optional[float] = None
+    if ticker:
+        try:
+            import free_extra_sources as _extra
+
+            delivery_pct = _extra.fetch_nse_delivery_pct_10d(ticker)
+        except Exception as exc:
+            logger.debug("delivery_pct_10d fetch failed for %s: %s", ticker, exc)
 
     return {
         "close_price": round(close, 2),
@@ -422,7 +430,7 @@ def compute_technicals(frame: pd.DataFrame, bench_frame: Optional[pd.DataFrame] 
         "rsi_14": rsi_14,
         "atr_value": atr_value,
         "alpha_3m": alpha_3m,
-        "delivery_pct_10d": round(delivery_pct, 1),
+        "delivery_pct_10d": delivery_pct,
     }
 
 
@@ -668,6 +676,18 @@ def build_live_row(
             px = float(prior["close_price"])
         if px is None:
             return None
+        # Delivery % doesn't depend on Yahoo OHLCV at all — NSE's bhavcopy
+        # archive is a separate real source, so still try it here rather
+        # than falling straight to a carried-forward/fabricated number.
+        delivery_pct_fallback: Optional[float] = None
+        try:
+            import free_extra_sources as _extra
+
+            delivery_pct_fallback = _extra.fetch_nse_delivery_pct_10d(ticker)
+        except Exception as exc:
+            logger.debug("delivery_pct_10d fallback fetch failed for %s: %s", ticker, exc)
+        if delivery_pct_fallback is None and prior.get("delivery_pct_10d") is not None:
+            delivery_pct_fallback = float(prior["delivery_pct_10d"])
         # Minimal technicals from prior — do NOT invent buyable RSI/SMA scores
         if prior.get("ohlcv_ready") and prior.get("sma_200"):
             tech = {
@@ -677,7 +697,7 @@ def build_live_row(
                 "rsi_14": float(prior.get("rsi_14") or 50.0),
                 "atr_value": float(prior.get("atr_value") or max(px * 0.02, 0.05)),
                 "alpha_3m": float(prior.get("alpha_3m") or 0.0),
-                "delivery_pct_10d": float(prior.get("delivery_pct_10d") or 45.0),
+                "delivery_pct_10d": delivery_pct_fallback,
             }
             ohlcv_ready = True
         else:
@@ -688,7 +708,7 @@ def build_live_row(
                 "rsi_14": 50.0,
                 "atr_value": float(prior.get("atr_value") or max(px * 0.02, 0.05)),
                 "alpha_3m": 0.0,
-                "delivery_pct_10d": 0.0,
+                "delivery_pct_10d": delivery_pct_fallback,
             }
         meta = {}
         if not fund.get("description"):
@@ -697,7 +717,7 @@ def build_live_row(
                 "technicals pending until Yahoo OHLCV returns."
             )
     else:
-        tech = compute_technicals(hist, bench_frame)
+        tech = compute_technicals(hist, bench_frame, ticker=ticker)
         meta = hist.attrs.get("meta") or {}
         ohlcv_ready = True
 
@@ -753,6 +773,15 @@ def build_live_row(
         "pe_ratio": pick_optional("pe_ratio"),
         "pb_ratio": pick_optional("pb_ratio"),
         "promoter_holding_pct": fund.get("promoter_holding_pct"),
+        # Official NSE XBRL cross-checks (see multi_source_data.py) — citable
+        # alongside the Screener-derived numbers above, not yet a scored
+        # checklist item on their own.
+        "xbrl_revenue": pick_optional("xbrl_revenue"),
+        "xbrl_profit_after_tax": pick_optional("xbrl_profit_after_tax"),
+        "xbrl_eps_basic": pick_optional("xbrl_eps_basic"),
+        "xbrl_period_end": fund.get("xbrl_period_end"),
+        "xbrl_consolidated": fund.get("xbrl_consolidated"),
+        "xbrl_source_url": fund.get("xbrl_source_url"),
         "fundamentals_verified": verified,
         "data_quality": quality,
         "fundamentals_sources": fund.get("fundamentals_sources") or [],

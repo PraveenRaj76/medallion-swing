@@ -255,6 +255,20 @@ def _fetch_nse_filings_safe(symbol: str) -> Dict[str, Any]:
         return {"source": "nse_filings", "ok": False}
 
 
+def _fetch_nse_xbrl_safe(symbol: str) -> Dict[str, Any]:
+    """NSE's own official quarterly-results XBRL — see nse_xbrl_provider.py
+    for how consolidated-vs-standalone selection and Interest Coverage were
+    validated (2026-08-24) before this was trusted enough to wire in here."""
+    try:
+        import nse_xbrl_provider as xbrl
+
+        result = xbrl.fetch_latest_quarterly_xbrl(symbol)
+        return result if result else {"source": "nse_xbrl", "ok": False}
+    except Exception as exc:
+        logger.debug("nse xbrl source failed %s: %s", symbol, exc)
+        return {"source": "nse_xbrl", "ok": False}
+
+
 def fetch_verified_fundamentals(ticker: str) -> Dict[str, Any]:
     """
     Screener.in primary, NSE corporate filings as the official fallback for
@@ -264,13 +278,15 @@ def fetch_verified_fundamentals(ticker: str) -> Dict[str, Any]:
     from concurrent.futures import ThreadPoolExecutor
 
     symbol = ticker.strip().upper()
-    with ThreadPoolExecutor(max_workers=2) as pool:
+    with ThreadPoolExecutor(max_workers=3) as pool:
         fut_scr = pool.submit(fetch_screener, symbol)
         fut_nse = pool.submit(_fetch_nse_filings_safe, symbol)
+        fut_xbrl = pool.submit(_fetch_nse_xbrl_safe, symbol)
         screener = fut_scr.result()
         nse_filings = fut_nse.result()
+        nse_xbrl = fut_xbrl.result()
 
-    sources_ok = [s["source"] for s in (screener, nse_filings) if s.get("ok")]
+    sources_ok = [s["source"] for s in (screener, nse_filings, nse_xbrl) if s.get("ok")]
 
     # Promoter pledge: NSE's own SAST disclosure is the authoritative record
     # — prefer it over Screener's derived figure even when both are present.
@@ -312,9 +328,22 @@ def fetch_verified_fundamentals(ticker: str) -> Dict[str, Any]:
         "peg_ratio": _num(screener.get("peg_ratio")) if screener.get("ok") else None,
         "yoy_profit_growth": _num(screener.get("yoy_profit_growth")) if screener.get("ok") else None,
         "net_debt_ebitda": None,   # not free-source-available; never invented
-        "interest_coverage": None,  # not free-source-available; never invented
+        # Was hard-coded None everywhere in this project's history — real as
+        # of 2026-08-24, self-computed from NSE's own official XBRL filing
+        # (the filing's own pre-built ratio tag was tested and found
+        # unreliable; see nse_xbrl_provider.py for the validation).
+        "interest_coverage": _num(nse_xbrl.get("interest_coverage")) if nse_xbrl.get("ok") else None,
         "promoter_pledge_pct": pledge_value,
         "promoter_holding_pct": holding,
+        # Official, citable cross-checks from the same XBRL filing — not
+        # scored directly yet, but real, sourced, and worth surfacing
+        # alongside the Screener-derived numbers rather than only in a log.
+        "xbrl_revenue": _num(nse_xbrl.get("revenue_from_operations")) if nse_xbrl.get("ok") else None,
+        "xbrl_profit_after_tax": _num(nse_xbrl.get("profit_after_tax")) if nse_xbrl.get("ok") else None,
+        "xbrl_eps_basic": _num(nse_xbrl.get("eps_basic")) if nse_xbrl.get("ok") else None,
+        "xbrl_period_end": nse_xbrl.get("period_end") if nse_xbrl.get("ok") else None,
+        "xbrl_consolidated": nse_xbrl.get("consolidated") if nse_xbrl.get("ok") else None,
+        "xbrl_source_url": nse_xbrl.get("xbrl_url") if nse_xbrl.get("ok") else None,
         "fundamentals_verified": confidence == CONFIDENCE_SOURCED,
         "fundamentals_sources": sources_ok,
         "sources_ok_count": len(sources_ok),
@@ -325,6 +354,7 @@ def fetch_verified_fundamentals(ticker: str) -> Dict[str, Any]:
             "raw_sources": {
                 "screener": {k: v for k, v in screener.items() if k != "description"},
                 "nse_filings": {k: v for k, v in nse_filings.items() if k != "description"},
+                "nse_xbrl": {k: v for k, v in nse_xbrl.items() if k not in ("description", "xbrl_url")},
             },
         },
     }

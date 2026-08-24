@@ -310,14 +310,20 @@ def evaluate_fundamental_checklist(row: Any) -> Dict[str, Any]:
 
         ic = _optional(row, "interest_coverage")
         if ic is None:
+            # As of 2026-08-24 this IS free-source-available (NSE's own XBRL
+            # quarterly filing, self-computed from ProfitBeforeTax +
+            # FinanceCosts — see nse_xbrl_provider.py). A None here now means
+            # this specific filing didn't carry FinanceCosts (e.g. a company
+            # the exchange hasn't filed results for recently), not that the
+            # data category is unreachable.
             items.append(
                 _item(
                     "Interest Coverage",
-                    "N/A (not on free sources)",
+                    "N/A (no recent XBRL filing)",
                     0.0,
                     0,
                     True,
-                    "Skipped — rarely published free; does not block the name.",
+                    "Skipped — this ticker's latest NSE filing didn't report finance costs; does not block the name.",
                 )
             )
         elif quality == "MISSING":
@@ -465,7 +471,7 @@ def evaluate_technical_checklist(row: Any, history: Optional[pd.DataFrame] = Non
     rsi = _f(row, "rsi_14", 50)
     atr = _f(row, "atr_value")
     alpha = _f(row, "alpha_3m")
-    delivery = _f(row, "delivery_pct_10d")
+    delivery = _optional(row, "delivery_pct_10d")
 
     if close > sma200:
         m, ok, note = 10.0, True, "Price above 200-day SMA — primary uptrend intact."
@@ -511,13 +517,30 @@ def evaluate_technical_checklist(row: Any, history: Optional[pd.DataFrame] = Non
         m, ok, note = 0.0, False, "Severe relative weakness vs Nifty."
     items.append(_item("3M Alpha vs Nifty", f"{alpha:+.1f}%", m, 8, ok, note))
 
-    if delivery >= 50:
-        m, ok, note = 5.0, True, "Strong volume conviction proxy (delivery/vol intensity)."
+    if delivery is None:
+        # NSE's own daily bhavcopy (DELIV_PER) — real data, free — see
+        # free_extra_sources.fetch_nse_delivery_pct_10d. A None here means
+        # that fetch genuinely came back empty for this ticker (blocked,
+        # newly listed, or no trading day found in the scan window), not
+        # that delivery data is unavailable as a category.
+        items.append(
+            _item(
+                "Delivery %",
+                "N/A (bhavcopy fetch empty)",
+                0.0,
+                0,
+                True,
+                "Skipped — real NSE delivery data unavailable for this ticker right now; does not block the name.",
+            )
+        )
+    elif delivery >= 50:
+        m, ok, note = 5.0, True, "Strong delivery-based conviction (NSE bhavcopy DELIV_PER)."
     elif delivery >= 40:
         m, ok, note = 3.5, True, "Acceptable participation."
     else:
-        m, ok, note = 1.0, False, "Weak participation proxy."
-    items.append(_item("Volume / Delivery Proxy", f"{delivery:.1f}", m, 5, ok, note))
+        m, ok, note = 1.0, False, "Weak participation."
+    if delivery is not None:
+        items.append(_item("Delivery %", f"{delivery:.1f}", m, 5, ok, note))
 
     atr_pct = (atr / close * 100.0) if close > 0 else 0.0
     if 1.0 <= atr_pct <= 4.5:
