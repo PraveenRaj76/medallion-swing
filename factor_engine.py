@@ -890,11 +890,30 @@ def split_screens(leaderboard: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame
 
 
 def profile_snapshot(row: Any) -> Dict[str, str]:
-    """Extra stock facts for Search Profile (Screener-style)."""
+    """Extra stock facts for Search Profile (Screener-style).
+
+    Ratios that can be genuinely unavailable (skipped in the checklist as
+    N/A, not scored as a bad 0) use _optional + "—" here too — a missing
+    Net Debt/EBITDA or Interest Coverage previously rendered as a
+    fabricated-looking "0.0x", which reads as a real bad ratio rather than
+    "no data." Matches the checklist's own N/A handling for the same fields.
+    """
     close = _f(row, "close_price")
     sma200 = _f(row, "sma_200")
     dist = ((close / sma200) - 1.0) * 100.0 if sma200 else 0.0
-    return {
+
+    roic = _optional(row, "roic")
+    net_debt_ebitda = _optional(row, "net_debt_ebitda")
+    peg = _optional(row, "peg_ratio")
+    ic = _optional(row, "interest_coverage")
+    pledge = _optional(row, "promoter_pledge_pct")
+    profit_growth = _optional(row, "yoy_profit_growth")
+
+    revenue = _optional(row, "xbrl_revenue")
+    profit_after_tax = _optional(row, "xbrl_profit_after_tax")
+    eps = _optional(row, "xbrl_eps_basic")
+
+    out = {
         "CMP": f"₹{close:,.2f}",
         "ATR (14)": f"₹{_f(row, 'atr_value'):,.2f}",
         "50-Day SMA": f"₹{_f(row, 'sma_50'):,.2f}",
@@ -902,14 +921,27 @@ def profile_snapshot(row: Any) -> Dict[str, str]:
         "Dist. from 200 SMA": f"{dist:+.2f}%",
         "RSI (14)": f"{_f(row, 'rsi_14', 50):.1f}",
         "3M Alpha vs Nifty": f"{_f(row, 'alpha_3m'):+.1f}%",
-        "ROCE / ROIC": f"{_f(row, 'roic'):.1f}%",
-        "Net Debt / EBITDA": f"{_f(row, 'net_debt_ebitda'):.2f}x",
-        "PEG": f"{_f(row, 'peg_ratio'):.2f}",
-        "Interest Coverage": f"{_f(row, 'interest_coverage'):.1f}x",
-        "Promoter Pledge": f"{_f(row, 'promoter_pledge_pct'):.1f}%",
-        "Profit Growth": f"{_f(row, 'yoy_profit_growth'):.1f}%",
+        "ROCE / ROIC": f"{roic:.1f}%" if roic is not None else "—",
+        "Net Debt / EBITDA": f"{net_debt_ebitda:.2f}x" if net_debt_ebitda is not None else "—",
+        "PEG": f"{peg:.2f}" if peg is not None else "—",
+        "Interest Coverage": f"{ic:.1f}x" if ic is not None else "—",
+        "Promoter Pledge": f"{pledge:.1f}%" if pledge is not None else "—",
+        "Profit Growth": f"{profit_growth:.1f}%" if profit_growth is not None else "—",
         "P/E": f"{_f(row, 'pe_ratio'):.1f}" if _f(row, "pe_ratio") > 0 else "—",
         "Sector": str(row.get("sector", "—")),
         "Industry": str(row.get("industry", "—")),
         "DB Composite": f"{_f(row, 'composite_score'):.1f}/100",
     }
+    # NSE XBRL quarterly figures (2026-08-24: fetched since this session's
+    # primary-source work but never surfaced before now — real, dated data
+    # sitting unused). Shown as a labelled group so it's clear these are
+    # last-filed-quarter figures, not TTM/annual like the rows above.
+    if revenue is not None:
+        out["Revenue (latest qtr, XBRL)"] = f"₹{revenue / 1e7:,.1f} Cr"
+    if profit_after_tax is not None:
+        out["Net Profit (latest qtr, XBRL)"] = f"₹{profit_after_tax / 1e7:,.1f} Cr"
+    if eps is not None:
+        out["EPS Basic (latest qtr, XBRL)"] = f"₹{eps:.2f}"
+    if (revenue is not None or profit_after_tax is not None or eps is not None) and row.get("xbrl_period_end"):
+        out["XBRL Filing Period"] = f"{row.get('xbrl_period_end')} ({row.get('xbrl_consolidated') or 'Standalone'})"
+    return out

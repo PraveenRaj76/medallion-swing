@@ -183,19 +183,47 @@ def fetch_screener(ticker: str) -> Dict[str, Any]:
         out["ok"] = False
         return out
 
+    def _parse_ratio_grid(html: str) -> Dict[str, float]:
+        ratios: Dict[str, float] = {}
+        items = re.findall(
+            r'<span class="name">\s*(.*?)\s*</span>\s*<span class="nowrap value">(.*?)</span>',
+            html,
+            re.S,
+        )
+        for name_html, val_html in items:
+            name = re.sub(r"<.*?>", "", name_html).strip().lower()
+            val = re.sub(r"\s+", " ", re.sub(r"<.*?>", "", val_html)).strip()
+            num = _num(val)
+            if num is not None:
+                ratios[name] = num
+        return ratios
+
     html = resp.text
-    ratios: Dict[str, float] = {}
-    items = re.findall(
-        r'<span class="name">\s*(.*?)\s*</span>\s*<span class="nowrap value">(.*?)</span>',
-        html,
-        re.S,
-    )
-    for name_html, val_html in items:
-        name = re.sub(r"<.*?>", "", name_html).strip().lower()
-        val = re.sub(r"\s+", " ", re.sub(r"<.*?>", "", val_html)).strip()
-        num = _num(val)
-        if num is not None:
-            ratios[name] = num
+    ratios = _parse_ratio_grid(html)
+    growth = _screener_profit_growth(html)
+
+    # The /consolidated/ page can return 200 with the core ratio grid and/or
+    # profit-growth table genuinely blank (seen live on Shanti Gold
+    # International, 2026-08-24 — ROCE/ROE/Book Value/profit growth all
+    # present with real values on the standalone page but empty on
+    # consolidated, likely because the company has no meaningful group
+    # consolidation to show). Only the HTTP-failure case was falling back
+    # before, so a 200-with-empty-data response silently produced None for
+    # fields the standalone page actually has. Retry standalone once and
+    # fill in whatever consolidated left blank — consolidated values still
+    # win when both are present.
+    core_keys = ("roce", "roe", "book value")
+    if not any(k in ratios for k in core_keys) or growth is None:
+        standalone_resp = _session_get(
+            f"https://www.screener.in/company/{slug}/",
+            "https://www.screener.in/",
+        )
+        if standalone_resp is not None and standalone_resp.status_code < 400:
+            standalone_html = standalone_resp.text
+            for k, v in _parse_ratio_grid(standalone_html).items():
+                ratios.setdefault(k, v)
+            if growth is None:
+                growth = _screener_profit_growth(standalone_html)
 
     out["ok"] = True
     out["close_price"] = ratios.get("current price")
@@ -210,7 +238,7 @@ def fetch_screener(ticker: str) -> Dict[str, Any]:
     m_prom = re.search(r"Promoter Holding[:\s]*([\d.]+)\s*%", html, re.I)
     out["promoter_holding_pct"] = float(m_prom.group(1)) if m_prom else None
 
-    out["yoy_profit_growth"] = _screener_profit_growth(html)
+    out["yoy_profit_growth"] = growth
 
     m_sec = re.search(r'Sector">\s*([^<]+?)\s*</a>', html, re.I)
     m_ind = re.search(r'Industry">\s*([^<]+?)\s*</a>', html, re.I)
@@ -378,8 +406,15 @@ def format_source_comparison(report: Dict[str, Any]) -> List[List[str]]:
     for key, label in keys:
         scr = raw.get("screener", {}).get(key)
         nse = raw.get("nse_filings", {}).get(key)
-        val = scr if scr is not None else nse
-        source_used = "Screener.in" if scr is not None else ("NSE Filing" if nse is not None else "—")
+        if key == "promoter_pledge_pct":
+            # Mirror the real precedence in fetch_verified_fundamentals: NSE's
+            # own SAST disclosure is authoritative and wins even when both
+            # are present. The generic "Screener wins if present" rule below
+            # previously mislabeled this row's Confidence as Screener.in even
+            # when the checklist was actually scoring off NSE's figure.
+            source_used = "NSE Filing" if nse is not None else ("Screener.in" if scr is not None else "—")
+        else:
+            source_used = "Screener.in" if scr is not None else ("NSE Filing" if nse is not None else "—")
         rows.append([
             label,
             "—" if scr is None else f"{scr:.2f}" if isinstance(scr, (int, float)) else str(scr),
