@@ -11,7 +11,7 @@ export function Nav() {
   return (
     <nav className="navbar">
       <div className="navbar__brand">
-        <MedallionLogo size={26} />
+        <MedallionLogo size={28} variant="icon" />
         Medallion Swing
       </div>
       <div className="navbar__links">
