@@ -12,7 +12,7 @@ function Protected({ children }: { children: React.ReactNode }) {
   const { userId } = useAuth()
   if (!userId) return <Navigate to="/login" replace />
   return (
-    <div className="app-shell">
+    <div className="app-shell starfield">
       <Nav />
       {children}
     </div>

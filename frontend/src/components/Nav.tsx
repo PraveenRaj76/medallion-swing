@@ -1,5 +1,6 @@
 import { NavLink } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
+import { MedallionLogo } from './MedallionLogo'
 
 export function Nav() {
   const { username, signOut } = useAuth()
@@ -10,7 +11,8 @@ export function Nav() {
   return (
     <nav className="navbar">
       <div className="navbar__brand">
-        <span>🪐</span> Medallion Swing
+        <MedallionLogo size={26} />
+        Medallion Swing
       </div>
       <div className="navbar__links">
         <NavLink to="/screener" className={linkClass}>

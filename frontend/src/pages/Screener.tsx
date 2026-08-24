@@ -74,7 +74,10 @@ export function Screener() {
             style={{ width: 120 }}
           />
         </div>
-        <div className="form-field" style={{ marginBottom: 0, flexDirection: 'row', alignItems: 'center', gap: '0.5rem' }}>
+        <div
+          className="form-field form-field--inline"
+          style={{ marginBottom: 0, flexDirection: 'row', alignItems: 'center', gap: '0.5rem' }}
+        >
           <input
             id="readyOnly"
             type="checkbox"

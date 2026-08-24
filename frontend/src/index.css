@@ -1,22 +1,26 @@
-@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:ital,wght@0,400;0,500;0,600;0,700;0,800;1,500&family=JetBrains+Mono:wght@400;500;600&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:ital,wght@0,400;0,500;0,600;0,700;0,800;1,500&family=Cinzel:wght@600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
 
 :root {
-  --canvas: #f8fafc;
-  --surface: #ffffff;
-  --surface-2: #f1f5f9;
-  --line: #e2e8f0;
-  --ink: #0f172a;
-  --muted: #64748b;
-  --muted-2: #94a3b8;
-  --primary: #2563eb;
-  --primary-soft: #eff6ff;
-  --emerald: #059669;
-  --emerald-soft: #ecfdf5;
-  --amber: #b45309;
-  --amber-soft: #fffbeb;
-  --crimson: #dc2626;
-  --crimson-soft: #fef2f2;
+  --canvas: #090c17;
+  --canvas-2: #0d1224;
+  --surface: #131a30;
+  --surface-2: #1a2340;
+  --line: #262f52;
+  --ink: #eef1f9;
+  --muted: #93a0c4;
+  --muted-2: #5d6a90;
+  --primary: #f0b429;
+  --primary-dim: #b98416;
+  --primary-soft: rgba(240, 180, 41, 0.14);
+  --on-primary: #1a1304;
+  --emerald: #34d399;
+  --emerald-soft: rgba(52, 211, 153, 0.14);
+  --amber: #fb923c;
+  --amber-soft: rgba(251, 146, 60, 0.14);
+  --crimson: #f87171;
+  --crimson-soft: rgba(248, 113, 113, 0.14);
   --font: 'Plus Jakarta Sans', system-ui, sans-serif;
+  --font-display: 'Cinzel', 'Times New Roman', serif;
   --mono: 'JetBrains Mono', ui-monospace, 'SF Mono', monospace;
   --nav-h: 60px;
 }
@@ -50,4 +54,38 @@ button {
 .tabular {
   font-variant-numeric: tabular-nums;
   font-family: var(--mono);
+}
+
+/* shared starfield ground, used behind the auth screen and the app shell */
+.starfield {
+  position: relative;
+  min-height: 100vh;
+  background: radial-gradient(ellipse 120% 90% at 50% -10%, #1b2350 0%, var(--canvas-2) 45%, var(--canvas) 100%);
+}
+.starfield::before,
+.starfield::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background-repeat: repeat;
+  opacity: 0.7;
+}
+.starfield::before {
+  background-image: radial-gradient(1.4px 1.4px at 20px 30px, #ffffff 100%, transparent 0),
+    radial-gradient(1px 1px at 90px 120px, #ffffff 100%, transparent 0),
+    radial-gradient(1.2px 1.2px at 160px 60px, #cdd6f5 100%, transparent 0),
+    radial-gradient(1px 1px at 220px 180px, #ffffff 100%, transparent 0),
+    radial-gradient(1.6px 1.6px at 260px 40px, #ffffff 100%, transparent 0),
+    radial-gradient(1px 1px at 320px 140px, #cdd6f5 100%, transparent 0);
+  background-size: 360px 220px;
+}
+.starfield::after {
+  background-image: radial-gradient(1px 1px at 50px 90px, #ffffff 100%, transparent 0),
+    radial-gradient(1.3px 1.3px at 130px 30px, #ffffff 100%, transparent 0),
+    radial-gradient(1px 1px at 200px 110px, #cdd6f5 100%, transparent 0),
+    radial-gradient(1.4px 1.4px at 280px 170px, #ffffff 100%, transparent 0),
+    radial-gradient(1px 1px at 340px 70px, #ffffff 100%, transparent 0);
+  background-size: 400px 260px;
+  opacity: 0.45;
 }

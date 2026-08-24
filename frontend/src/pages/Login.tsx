@@ -2,6 +2,7 @@ import { useState, type FormEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { ApiError, login, register } from '../api/client'
 import { useAuth } from '../context/AuthContext'
+import { MedallionLogo } from '../components/MedallionLogo'
 
 export function Login() {
   const [mode, setMode] = useState<'signin' | 'signup'>('signin')
@@ -35,18 +36,14 @@ export function Login() {
   }
 
   return (
-    <div className="auth-shell">
+    <div className="auth-shell starfield">
       <div className="auth-card">
         <div className="auth-hero">
-          <div className="emoji">🪐</div>
-          <h1>Medallion Swing Engine</h1>
-          <blockquote>
-            “We do data. We don't have opinions.”
-            <cite>— Jim Simons</cite>
-          </blockquote>
+          <MedallionLogo />
+          <p className="tagline">NSE + US quantamental screener &amp; forward-test engine</p>
         </div>
 
-        <div className="card">
+        <div className="auth-panel">
           <div className="auth-toggle">
             <button className={mode === 'signin' ? 'active' : ''} onClick={() => setMode('signin')} type="button">
               Sign In
@@ -97,6 +94,10 @@ export function Login() {
               {busy ? 'Please wait…' : mode === 'signin' ? 'Sign In' : 'Create Account'}
             </button>
           </form>
+
+          <p className="auth-quote">
+            “We do data. We don't have opinions.” <cite>— Jim Simons</cite>
+          </p>
         </div>
       </div>
     </div>
