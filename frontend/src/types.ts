@@ -76,6 +76,15 @@ export interface ScreenerRow {
   last_updated: string | null
   data_quality: string
   fundamentals_verified: number
+  sma_50?: number | null
+  sma_200?: number | null
+  rsi_14?: number | null
+  alpha_3m?: number | null
+  pe_ratio?: number | null
+  pb_ratio?: number | null
+  roic?: number | null
+  roe?: number | null
+  peg_ratio?: number | null
   [key: string]: unknown
 }
 
@@ -121,7 +130,20 @@ export interface ForwardTestPosition {
   entry_price: number
   stop_loss: number
   target: number
+  current_price?: number | null
+  unrealized_pnl?: number | null
   [key: string]: unknown
+}
+
+export interface ForwardTestTrade {
+  ticker: string
+  exit_status: string
+  absolute_delta: number
+  pct_return: number
+  days_elapsed: number
+  velocity_label: string
+  entry_price: number
+  exit_price: number
 }
 
 export interface ForwardTestResponse {
@@ -140,6 +162,6 @@ export interface ForwardTestResponse {
   avg_hold_days: number | null
   velocity_buckets: Record<string, number>
   return_buckets: Record<string, number>
-  trades: Record<string, unknown>[]
+  trades: ForwardTestTrade[]
   active_positions: ForwardTestPosition[]
 }
