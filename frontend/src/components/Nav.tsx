@@ -1,10 +1,8 @@
 import { NavLink } from 'react-router-dom'
-import { useAuth } from '../context/AuthContext'
 import { MedallionLogo } from './MedallionLogo'
+import { UserProfileMenu } from './UserProfileMenu'
 
 export function Nav({ onOpenCmdk }: { onOpenCmdk: () => void }) {
-  const { username, signOut } = useAuth()
-
   const linkClass = ({ isActive }: { isActive: boolean }) => (isActive ? 'active' : '')
 
   return (
@@ -35,9 +33,7 @@ export function Nav({ onOpenCmdk }: { onOpenCmdk: () => void }) {
         </svg>
         <span className="cmdk-label">Jump to&hellip;</span> <span className="kbd">Ctrl K</span>
       </button>
-      <button className="user mono" onClick={signOut} title="Sign out">
-        {username} &middot; log out
-      </button>
+      <UserProfileMenu />
     </nav>
   )
 }

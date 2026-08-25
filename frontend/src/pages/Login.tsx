@@ -2,7 +2,64 @@ import { useState, type FormEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { ApiError, login, register } from '../api/client'
 import { useAuth } from '../context/AuthContext'
-import logo from '../assets/medallion-logo.png'
+import { MedallionLogo } from '../components/MedallionLogo'
+
+function EyeIcon({ off }: { off: boolean }) {
+  if (off) {
+    return (
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M17.94 17.94A10.94 10.94 0 0 1 12 20c-7 0-11-8-11-8a18.6 18.6 0 0 1 5.06-5.94M9.9 4.24A10.94 10.94 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" />
+        <line x1="1" y1="1" x2="23" y2="23" />
+      </svg>
+    )
+  }
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+      <circle cx="12" cy="12" r="3" />
+    </svg>
+  )
+}
+
+function PasswordField({
+  id,
+  label,
+  value,
+  onChange,
+  autoComplete,
+}: {
+  id: string
+  label: string
+  value: string
+  onChange: (v: string) => void
+  autoComplete: string
+}) {
+  const [shown, setShown] = useState(false)
+  return (
+    <div className="login-field">
+      <label htmlFor={id}>{label}</label>
+      <div className="login-password-wrap">
+        <input
+          id={id}
+          type={shown ? 'text' : 'password'}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          autoComplete={autoComplete}
+          required
+        />
+        <button
+          type="button"
+          className="login-eye-toggle"
+          onClick={() => setShown((s) => !s)}
+          aria-label={shown ? 'Hide password' : 'Show password'}
+          tabIndex={-1}
+        >
+          <EyeIcon off={shown} />
+        </button>
+      </div>
+    </div>
+  )
+}
 
 export function Login() {
   const [mode, setMode] = useState<'signin' | 'signup'>('signin')
@@ -39,8 +96,8 @@ export function Login() {
     <div id="loginScreen">
       <div className="login-card">
         <div className="login-brand">
-          <img src={logo} alt="Medallion Swing" />
-          <div className="tag">NSE + US quantamental screener &amp; forward-test engine</div>
+          <MedallionLogo size={190} variant="hero" />
+          <div className="tag">NSE + US quantamental screener &amp; forward-test</div>
         </div>
 
         <div className="login-tabs" role="tablist">
@@ -74,34 +131,24 @@ export function Login() {
               value={username}
               onChange={(e) => setUsername(e.target.value)}
               autoComplete="username"
-              placeholder="praveen76"
               required
             />
           </div>
-          <div className="login-field">
-            <label htmlFor="password">Password</label>
-            <input
-              id="password"
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              autoComplete={mode === 'signin' ? 'current-password' : 'new-password'}
-              placeholder="&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;"
-              required
-            />
-          </div>
+          <PasswordField
+            id="password"
+            label="Password"
+            value={password}
+            onChange={setPassword}
+            autoComplete={mode === 'signin' ? 'current-password' : 'new-password'}
+          />
           {mode === 'signup' && (
-            <div className="login-field">
-              <label htmlFor="confirm">Confirm Password</label>
-              <input
-                id="confirm"
-                type="password"
-                value={confirm}
-                onChange={(e) => setConfirm(e.target.value)}
-                autoComplete="new-password"
-                required
-              />
-            </div>
+            <PasswordField
+              id="confirm"
+              label="Confirm Password"
+              value={confirm}
+              onChange={setConfirm}
+              autoComplete="new-password"
+            />
           )}
           <button className="login-submit" type="submit" disabled={busy}>
             {busy ? 'Please wait…' : mode === 'signin' ? 'Sign In' : 'Create Account'}

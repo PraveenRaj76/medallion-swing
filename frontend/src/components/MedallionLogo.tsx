@@ -1,11 +1,13 @@
-import logo from '../assets/medallion-logo.png'
+import logo from '../assets/medallion-logo-cropped.png'
 
 /**
- * variant "hero" shows the full artwork (medal + ribbon) at a large size for
- * the login screen. variant "icon" clips to just the coin face, zoomed and
- * centered, for the small navbar mark — the source image is a square crop
- * with the ribbon taking up the top third, which reads as a tiny black
- * smudge at 26px if shown uncropped.
+ * Source asset is medallion-logo-cropped.png — the original artwork with
+ * the ribbon trimmed to its bottom ~25% (just the stub sitting above the
+ * crest) and the black background chroma-keyed to real alpha transparency
+ * (Pillow, decontaminated edges — see the asset's generation notes in the
+ * project history). variant "hero" shows the full artwork (ribbon stub +
+ * medal) for the login screen. variant "icon" crops to just the coin
+ * circle for the small navbar mark.
  */
 export function MedallionLogo({
   size = 130,
@@ -31,11 +33,10 @@ export function MedallionLogo({
           src={logo}
           alt="Medallion Swing"
           style={{
-            width: '190%',
-            height: '190%',
+            width: '100%',
+            height: '100%',
             objectFit: 'cover',
-            objectPosition: '50% 68%',
-            transform: 'translate(-24%, -34%)',
+            objectPosition: '50% 100%',
           }}
         />
       </span>
@@ -47,8 +48,7 @@ export function MedallionLogo({
       src={logo}
       alt="Medallion Swing"
       width={size}
-      height={size}
-      style={{ width: size, height: size, objectFit: 'contain', display: 'block', margin: '0 auto' }}
+      style={{ width: size, height: 'auto', objectFit: 'contain', display: 'block', margin: '0 auto' }}
     />
   )
 }

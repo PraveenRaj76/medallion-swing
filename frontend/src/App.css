@@ -95,6 +95,145 @@ nav {
   background: none;
   border: none;
 }
+
+/* ---------- profile menu ---------- */
+.profile-menu {
+  position: relative;
+}
+.profile-menu-trigger {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 99px;
+  padding: 5px 12px 5px 5px;
+  transition: border-color 0.15s, background 0.15s;
+}
+.profile-menu-trigger:hover {
+  border-color: var(--border-2);
+  background: var(--surface-2);
+}
+.profile-avatar {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--gold), #a9762f);
+  color: var(--bg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10.5px;
+  font-weight: 700;
+  font-family: 'Space Grotesk', sans-serif;
+  flex-shrink: 0;
+}
+.profile-avatar--lg {
+  width: 42px;
+  height: 42px;
+  font-size: 15px;
+}
+.profile-menu-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+}
+.profile-menu-dropdown {
+  position: absolute;
+  top: calc(100% + 10px);
+  right: 0;
+  width: 300px;
+  background: rgba(19, 26, 48, 0.82);
+  backdrop-filter: blur(22px);
+  -webkit-backdrop-filter: blur(22px);
+  border: 1px solid var(--border-2);
+  border-radius: 18px;
+  padding: 18px;
+  box-shadow: 0 30px 80px -16px rgba(0, 0, 0, 0.65);
+  z-index: 40;
+}
+.profile-menu-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--border);
+}
+.profile-menu-fullname {
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: 14.5px;
+  font-weight: 600;
+  color: var(--text);
+}
+.profile-menu-sub {
+  font-size: 11.5px;
+  color: var(--text-faint);
+  margin-top: 2px;
+}
+.profile-menu-field {
+  margin-bottom: 12px;
+}
+.profile-menu-field label {
+  display: block;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  margin-bottom: 5px;
+}
+.profile-menu-field input {
+  width: 100%;
+  background: rgba(8, 11, 20, 0.55);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  color: var(--text);
+  font-size: 13px;
+  padding: 8px 10px;
+}
+.profile-menu-field input:focus {
+  border-color: var(--gold);
+}
+.profile-menu-save {
+  width: 100%;
+  background: var(--gold);
+  color: var(--bg);
+  border: none;
+  border-radius: 10px;
+  padding: 10px;
+  font-weight: 700;
+  font-size: 13px;
+  margin-top: 4px;
+  transition: filter 0.15s;
+}
+.profile-menu-save:hover {
+  filter: brightness(1.08);
+}
+.profile-menu-divider {
+  height: 1px;
+  background: var(--border);
+  margin: 14px 0;
+}
+.profile-menu-logout {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: var(--loss-dim);
+  color: var(--loss);
+  border: 1px solid rgba(232, 130, 122, 0.3);
+  border-radius: 10px;
+  padding: 10px;
+  font-weight: 600;
+  font-size: 13px;
+  transition: background 0.15s;
+}
+.profile-menu-logout:hover {
+  background: rgba(232, 130, 122, 0.2);
+}
 @media (max-width: 920px) {
   nav {
     flex-wrap: wrap;
@@ -1009,14 +1148,14 @@ td.ticker {
 }
 .login-card {
   width: 100%;
-  max-width: 400px;
+  max-width: 460px;
   background: var(--surface);
   backdrop-filter: blur(24px);
   -webkit-backdrop-filter: blur(24px);
   border: 1px solid var(--border-2);
-  border-radius: 20px;
-  padding: 36px 34px;
-  box-shadow: 0 30px 90px -20px rgba(0, 0, 0, 0.6);
+  border-radius: 26px;
+  padding: 48px 46px 42px;
+  box-shadow: 0 40px 110px -20px rgba(0, 0, 0, 0.65);
   position: relative;
   overflow: hidden;
 }
@@ -1034,35 +1173,31 @@ td.ticker {
   flex-direction: column;
   align-items: center;
   text-align: center;
-  margin-bottom: 24px;
-}
-.login-brand img {
-  width: 150px;
-  margin-bottom: 2px;
-  object-fit: contain;
+  margin-bottom: 30px;
 }
 .login-brand .tag {
   color: var(--text-dim);
-  font-size: 13px;
-  margin-top: 8px;
+  font-size: 14.5px;
+  margin-top: 10px;
+  letter-spacing: 0.1px;
 }
 .login-tabs {
   display: flex;
   gap: 4px;
-  margin-bottom: 20px;
+  margin-bottom: 26px;
   background: var(--surface-3);
-  padding: 4px;
-  border-radius: 12px;
+  padding: 5px;
+  border-radius: 14px;
 }
 .login-tabs button {
   flex: 1;
   border: none;
   background: none;
   color: var(--text-dim);
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 600;
-  padding: 9px;
-  border-radius: 9px;
+  padding: 11px;
+  border-radius: 10px;
   transition: background 0.2s, color 0.2s;
 }
 .login-tabs button.active {
@@ -1070,15 +1205,15 @@ td.ticker {
   color: var(--bg);
 }
 .login-msg {
-  font-size: 12.5px;
-  border-radius: 10px;
+  font-size: 13px;
+  border-radius: 11px;
   padding: 0;
   margin-bottom: 0;
   transition: all 0.15s;
 }
 .login-msg.show {
-  padding: 10px 13px;
-  margin-bottom: 14px;
+  padding: 11px 15px;
+  margin-bottom: 16px;
 }
 .login-msg.error {
   background: var(--loss-dim);
@@ -1091,39 +1226,65 @@ td.ticker {
   border: 1px solid rgba(111, 207, 151, 0.3);
 }
 .login-field {
-  margin-bottom: 14px;
+  margin-bottom: 18px;
 }
 .login-field label {
   display: block;
-  font-size: 11px;
+  font-size: 11.5px;
   font-weight: 600;
   letter-spacing: 0.4px;
   text-transform: uppercase;
   color: var(--text-faint);
-  margin-bottom: 6px;
+  margin-bottom: 7px;
 }
 .login-field input {
   width: 100%;
   background: rgba(8, 11, 20, 0.55);
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: 12px;
   color: var(--text);
-  font-size: 14px;
-  padding: 11px 13px;
+  font-size: 15px;
+  padding: 13px 15px;
 }
 .login-field input:focus {
   border-color: var(--gold);
+}
+.login-password-wrap {
+  position: relative;
+}
+.login-password-wrap input {
+  padding-right: 44px;
+}
+.login-eye-toggle {
+  position: absolute;
+  top: 50%;
+  right: 6px;
+  transform: translateY(-50%);
+  width: 34px;
+  height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  border-radius: 8px;
+  color: var(--text-faint);
+  transition: color 0.15s, background 0.15s;
+}
+.login-eye-toggle:hover {
+  color: var(--gold);
+  background: var(--surface-3);
 }
 .login-submit {
   width: 100%;
   background: var(--gold);
   color: var(--bg);
   border: none;
-  border-radius: 11px;
-  padding: 12px;
+  border-radius: 13px;
+  padding: 15px;
   font-weight: 700;
-  font-size: 14px;
-  margin-top: 4px;
+  font-size: 15px;
+  margin-top: 8px;
   transition: filter 0.15s, transform 0.15s;
 }
 .login-submit:hover {
