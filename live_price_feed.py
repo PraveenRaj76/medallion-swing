@@ -183,11 +183,68 @@ def _reset_session() -> None:
 # --------------------------------------------------------------------------
 # Public API (same shape as the previous scraper-based version)
 # --------------------------------------------------------------------------
+def _fetch_yahoo_quotes_batch(symbols: List[str]) -> Dict[str, Dict[str, Any]]:
+    """Fallback batch quotes when Angel One isn't configured/reachable.
+
+    Reuses nse_data_provider.fetch_ohlcv (the same Yahoo path already proven
+    live throughout this codebase for Search Profile / the checklist), run
+    in parallel. This is deliberately the fallback, not the default: the
+    module docstring's own history is that a Yahoo/scrape-based batch quote
+    path got rate-limited at 200-stock scale on shared cloud IPs, which is
+    exactly why Angel One replaced it. Without Angel One credentials,
+    though, the alternative isn't "reliable Angel One data" vs "unreliable
+    Yahoo data" — it's "unreliable Yahoo data" vs "zero data, every time,"
+    since the batch refresh otherwise fails 100% of symbols outright. A
+    partial, rate-limit-risked real feed is strictly better than that.
+    """
+    import nse_data_provider as ndp
+    from concurrent.futures import ThreadPoolExecutor
+
+    out: Dict[str, Dict[str, Any]] = {}
+
+    def _one(sym: str) -> tuple:
+        try:
+            frame = ndp.fetch_ohlcv(sym, range_param="5d", interval="1d")
+        except Exception as exc:
+            return sym, None, str(exc)
+        if frame is None or frame.empty:
+            return sym, None, "no OHLCV from Yahoo"
+        return sym, frame, None
+
+    with ThreadPoolExecutor(max_workers=16) as pool:
+        for sym, frame, err in pool.map(_one, symbols):
+            if frame is None:
+                out[sym] = {"source": "yahoo", "ok": False, "ticker": sym,
+                            "price_kind": None, "error": err or "no data"}
+                continue
+            last = frame.iloc[-1]
+            prev = float(frame["close"].iloc[-2]) if len(frame) >= 2 else None
+            close = float(last["close"])
+            out[sym] = {
+                "source": "yahoo",
+                "ok": True,
+                "ticker": sym,
+                "close_price": round(close, 2),
+                "prev_close": round(prev, 2) if prev is not None else None,
+                "day_high": float(last["high"]) if "high" in last else None,
+                "day_low": float(last["low"]) if "low" in last else None,
+                "open": float(last["open"]) if "open" in last else None,
+                "day_change": round(close - prev, 2) if prev is not None else None,
+                "day_change_pct": round((close - prev) / prev * 100, 2) if prev else None,
+                "volume": float(last["volume"]) if "volume" in last else None,
+                "price_kind": "LAST",  # end-of-day bar, not a true intraday LTP
+                "sources_checked": ["yahoo"],
+                "fetched_at": _now_iso(),
+            }
+    return out
+
+
 def fetch_live_quotes_batch(
     tickers: List[str],
-    max_workers: int = 16,  # kept for signature compatibility; unused — Angel
-                              # One's batched quote endpoint replaces per-ticker
-                              # threading with one call per 50 symbols.
+    max_workers: int = 16,  # kept for signature compatibility; unused for the
+                              # Angel One path — its batched quote endpoint
+                              # covers up to 50 symbols per call. Used
+                              # directly by the Yahoo fallback below.
 ) -> Dict[str, Dict[str, Any]]:
     out: Dict[str, Dict[str, Any]] = {}
     symbols = [t.strip().upper() for t in tickers if t and str(t).strip()]
@@ -195,17 +252,13 @@ def fetch_live_quotes_batch(
         return out
 
     if not ANGEL_CONFIGURED:
-        for sym in symbols:
-            out[sym] = {"source": "none", "ok": False, "ticker": sym, "price_kind": None,
-                        "error": "Angel One credentials not configured"}
-        return out
+        logger.info("Angel One not configured — falling back to Yahoo for %d symbols", len(symbols))
+        return _fetch_yahoo_quotes_batch(symbols)
 
     smart = _get_session()
     if smart is None:
-        for sym in symbols:
-            out[sym] = {"source": "none", "ok": False, "ticker": sym, "price_kind": None,
-                        "error": "Angel One login failed"}
-        return out
+        logger.info("Angel One login failed — falling back to Yahoo for %d symbols", len(symbols))
+        return _fetch_yahoo_quotes_batch(symbols)
 
     scrip_map = _load_scrip_map()
     tokens: List[str] = []
