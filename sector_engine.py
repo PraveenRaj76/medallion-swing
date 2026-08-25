@@ -28,6 +28,7 @@ from typing import Any, Dict, List, Optional
 import pandas as pd
 
 import database_engine as db
+import sector_valuation
 
 logger = logging.getLogger(__name__)
 
@@ -124,6 +125,36 @@ def _valuation_read(median_pe: Optional[float], pe_vs_market_pct: Optional[float
             "history (see sector_history once enough days have accumulated).")
 
 
+def _etf_valuation_by_gics(market: str) -> Dict[str, Dict[str, Any]]:
+    """Real sector-ETF valuation + RRG-style momentum (sector_valuation.py),
+    ranked cheapest-to-priciest by ETF PE within this market only — never
+    compared across markets, matching the Finviz/peer-group caution that
+    PE is only meaningful within a comparable group. Keyed by the same
+    GICS-equivalent label _gics_for() already normalizes stock rows onto,
+    so it can be merged onto (or, for a market with no stock universe yet,
+    stand in for) the per-sector rows below."""
+    try:
+        etf_rows = sector_valuation.get_sector_valuation_momentum(market)
+    except Exception as exc:
+        logger.warning("sector ETF valuation fetch failed (non-fatal): %s", exc)
+        return {}
+
+    priced = [r for r in etf_rows if r.get("etf_pe")]
+    priced.sort(key=lambda r: r["etf_pe"])
+    rank_by_ticker = {r["etf_ticker"]: i + 1 for i, r in enumerate(priced)}
+    n_priced = len(priced)
+
+    out: Dict[str, Dict[str, Any]] = {}
+    for r in etf_rows:
+        rank = rank_by_ticker.get(r["etf_ticker"])
+        out[r["sector"]] = {
+            **r,
+            "etf_pe_rank": rank,
+            "etf_pe_rank_of": n_priced if rank else None,
+        }
+    return out
+
+
 def sector_pe_trend(market: str, sector: str, lookback_days: int = 30) -> Optional[Dict[str, Any]]:
     """The actual "vs. its own history" read — only returns once
     snapshot_sector_history() has been accumulating real data for a while.
@@ -148,44 +179,54 @@ def sector_pe_trend(market: str, sector: str, lookback_days: int = 30) -> Option
 
 
 def compute_sector_rankings(market: str = "IN") -> Dict[str, Any]:
-    """Rank sectors within the current live universe for one market.
+    """Rank sectors within the current live universe for one market, plus
+    real sector-ETF valuation/momentum (sector_valuation.py) merged in.
 
-    Returns {"market", "as_of", "universe_size", "rankings": [...]}. An
-    empty `rankings` list with a populated `note` means "no data for this
-    market yet" (honest, e.g. for US before that data provider exists) —
-    never fabricated rows.
+    Returns {"market", "as_of", "universe_size", "rankings": [...]}. Even
+    when there's no per-stock universe for this market yet (US, until a
+    full EDGAR-backed screener exists), `rankings` is not forced empty —
+    the real ETF-level valuation/momentum rows still populate it, clearly
+    marked as ETF-only (constituent_count 0) rather than stock aggregation.
+    `note` explains what's missing without hiding real data behind it.
     """
+    etf_by_gics = _etf_valuation_by_gics(market)
+
     frame = db.get_leaderboard(limit=2000)
+    if frame is not None and not frame.empty:
+        if "market" in frame.columns:
+            frame = frame[frame["market"].fillna("IN").str.upper() == market.upper()]
+        elif market.upper() != "IN":
+            # Pre-migration rows have no market column at all — they're India-only.
+            frame = frame.iloc[0:0]
+
+    has_stock_universe = frame is not None and not frame.empty
     note = None
-    if frame is None or frame.empty:
-        return {"market": market, "as_of": db.screener_as_of(), "universe_size": 0,
-                "rankings": [], "note": "No leaderboard data yet — run a refresh first."}
-
-    if "market" in frame.columns:
-        frame = frame[frame["market"].fillna("IN").str.upper() == market.upper()]
-    elif market.upper() != "IN":
-        # Pre-migration rows have no market column at all — they're India-only.
-        frame = frame.iloc[0:0]
-
-    if frame.empty:
+    if not has_stock_universe:
         note = (
-            f"No {market.upper()} data in the leaderboard yet."
-            + (" The US data provider hasn't been built — this is Phase 2, not a bug."
-               if market.upper() == "US" else "")
+            f"No {market.upper()} per-stock universe yet"
+            + (" — the US screener needs a SEC EDGAR pipeline that hasn't been built (Phase 2, not a bug)."
+               if market.upper() == "US" else " — run a refresh first.")
+            + (" Sector rows below are real ETF-level valuation/momentum only — no per-stock"
+               " breadth or quality score behind them yet." if etf_by_gics else "")
         )
-        return {"market": market, "as_of": db.screener_as_of(), "universe_size": 0,
-                "rankings": [], "note": note}
+        if not etf_by_gics:
+            return {"market": market.upper(), "as_of": db.screener_as_of(), "universe_size": 0,
+                    "rankings": [], "note": note}
 
-    universe_size = len(frame)
+    universe_size = len(frame) if has_stock_universe else 0
     rows: List[Dict[str, Any]] = []
+    matched_gics: set = set()
 
     # Whole-universe median PE — the reference point for "cheap/pricey RIGHT
     # NOW relative to everything else," which is computable today with zero
     # external history. Different (weaker) claim than "vs. its own past."
-    universe_pe = pd.to_numeric(frame.get("pe_ratio"), errors="coerce")
-    universe_median_pe = _median([p for p in universe_pe.tolist() if p and p > 0])
+    universe_median_pe = None
+    if has_stock_universe:
+        universe_pe = pd.to_numeric(frame.get("pe_ratio"), errors="coerce")
+        universe_median_pe = _median([p for p in universe_pe.tolist() if p and p > 0])
 
-    for sector, grp in frame.groupby(frame["sector"].fillna("Unclassified")):
+    stock_groups = frame.groupby(frame["sector"].fillna("Unclassified")) if has_stock_universe else []
+    for sector, grp in stock_groups:
         n = len(grp)
         buyable_n = int(grp["is_buyable"].fillna(0).astype(int).sum()) if "is_buyable" in grp else 0
         composite = pd.to_numeric(grp.get("composite_score"), errors="coerce").tolist()
@@ -218,9 +259,14 @@ def compute_sector_rankings(market: str = "IN") -> Dict[str, Any]:
             if confident else None
         )
 
+        gics = _gics_for(str(sector))
+        etf = etf_by_gics.get(gics)
+        if etf:
+            matched_gics.add(gics)
+
         rows.append({
             "sector": str(sector),
-            "gics_equivalent": _gics_for(str(sector)),
+            "gics_equivalent": gics,
             "constituent_count": n,
             "buyable_count": buyable_n,
             "buyable_pct": round(buyable_ratio * 100, 1),
@@ -237,12 +283,68 @@ def compute_sector_rankings(market: str = "IN") -> Dict[str, Any]:
             "why": _why_to_buy(str(sector), n, buyable_n, median_composite, top_ticker, top_score),
             "valuation_read": _valuation_read(median_pe, pe_vs_market_pct, median_peg),
             "pe_vs_own_history": sector_pe_trend(market.upper(), str(sector)),
+            "etf_ticker": etf.get("etf_ticker") if etf else None,
+            "etf_pe": etf.get("etf_pe") if etf else None,
+            "etf_pb": etf.get("etf_pb") if etf else None,
+            "etf_dividend_yield": etf.get("etf_dividend_yield") if etf else None,
+            "etf_pe_rank": etf.get("etf_pe_rank") if etf else None,
+            "etf_pe_rank_of": etf.get("etf_pe_rank_of") if etf else None,
+            "rel_strength_pct": etf.get("rel_strength_pct") if etf else None,
+            "rel_momentum_pct": etf.get("rel_momentum_pct") if etf else None,
+            "quadrant": etf.get("quadrant") if etf else None,
+            "etf_only": False,
         })
 
-    # Confident-sample sectors ranked first (by score), thin-sample sectors
-    # trail the list rather than being hidden — visible, just not ranked
-    # against sectors with an actual sample behind them.
-    rows.sort(key=lambda r: (not r["confident_sample"], -(r["sector_score"] or -1)))
+    # ETF sectors with no matching stock-level row — either this market has
+    # no per-stock universe at all yet (US), or the current universe just
+    # doesn't happen to hold a stock in that GICS bucket. Appended rather
+    # than dropped, so the undervalued-sector view is never missing a real
+    # sector just because the stock screener hasn't caught up to it.
+    for gics_label, etf in etf_by_gics.items():
+        if gics_label in matched_gics:
+            continue
+        rows.append({
+            "sector": gics_label,
+            "gics_equivalent": gics_label,
+            "constituent_count": 0,
+            "buyable_count": 0,
+            "buyable_pct": None,
+            "median_composite_score": None,
+            "median_fundamental_score": None,
+            "median_technical_score": None,
+            "median_pe": None,
+            "median_peg": None,
+            "pe_vs_universe_median_pct": None,
+            "sector_score": None,
+            "confident_sample": False,
+            "top_ticker": None,
+            "top_ticker_score": None,
+            "why": "No stock in the current live universe falls in this sector yet — ETF-level valuation and momentum are real; sector-wide breadth/quality can't be read until the universe covers it.",
+            "valuation_read": None,
+            "pe_vs_own_history": sector_pe_trend(market.upper(), gics_label),
+            "etf_ticker": etf.get("etf_ticker"),
+            "etf_pe": etf.get("etf_pe"),
+            "etf_pb": etf.get("etf_pb"),
+            "etf_dividend_yield": etf.get("etf_dividend_yield"),
+            "etf_pe_rank": etf.get("etf_pe_rank"),
+            "etf_pe_rank_of": etf.get("etf_pe_rank_of"),
+            "rel_strength_pct": etf.get("rel_strength_pct"),
+            "rel_momentum_pct": etf.get("rel_momentum_pct"),
+            "quadrant": etf.get("quadrant"),
+            "etf_only": True,
+        })
+
+    # Cheapest sector-ETF PE first (real, peer-group-only comparison — see
+    # module docstring) when that data exists; falls back to the older
+    # confident-sample/composite-score sort for a market with no ETF data
+    # at all. Undervaluation is the headline sort now, not a same-priority
+    # tiebreaker, per the "undervalued sectors top to bottom" brief.
+    def _sort_key(r: Dict[str, Any]):
+        if r.get("etf_pe_rank") is not None:
+            return (0, r["etf_pe_rank"])
+        return (1, not r["confident_sample"], -(r["sector_score"] or -1))
+
+    rows.sort(key=_sort_key)
 
     result = {
         "market": market.upper(),

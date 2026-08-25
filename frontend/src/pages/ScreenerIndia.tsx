@@ -5,6 +5,7 @@ import type { ScreenerResponse, ScreenerRow, SectorsResponse } from '../types'
 import { useAuth } from '../context/AuthContext'
 import { qualityPill, Pill } from '../components/Pill'
 import { TrendBadge } from '../components/TrendBadge'
+import { SectorValuationTable } from '../components/SectorValuationTable'
 import { useSort } from '../hooks/useSort'
 
 function median(nums: number[]): number | null {
@@ -293,61 +294,45 @@ function BestSectorView() {
       .finally(() => setLoading(false))
   }, [])
 
-  const getVal = (row: SectorsResponse['rankings'][number], key: string): string | number => {
-    switch (key) {
-      case 'sector':
-        return row.sector
-      case 'n':
-        return row.constituent_count
-      case 'buyable':
-        return row.buyable_pct
-      case 'composite':
-        return row.median_composite_score ?? -1
-      case 'pe':
-        return row.median_pe ?? -1
-      case 'score':
-        return row.sector_score ?? -1
-      default:
-        return ''
-    }
-  }
-  const { sorted, toggle, arrow } = useSort(data?.rankings ?? [], getVal, 'score', 'desc')
-  const top = sorted[0]
-
   if (loading) return <div className="section" style={{ marginTop: 32 }}><p className="hero-sub">Loading sector rankings…</p></div>
   if (error) return <div className="section" style={{ marginTop: 32 }}><span className="pill loss">{error}</span></div>
-  if (!data || sorted.length === 0)
+  const rows = data?.rankings ?? []
+  if (!data || rows.length === 0)
     return (
       <div className="section" style={{ marginTop: 32 }}>
         <p className="hero-sub">No sector data yet — run a Screener refresh first.</p>
       </div>
     )
 
+  const cheapest = rows[0]
+  const hasStockData = rows.some((r) => !r.etf_only)
+
   return (
     <>
       <div className="section" style={{ marginTop: 8 }}>
         <div className="card" style={{ padding: '26px 28px' }}>
           <div className="eyebrow" style={{ marginBottom: 10 }}>
-            Best Sector Right Now
+            Most Undervalued Sector Right Now
           </div>
           <div style={{ display: 'flex', alignItems: 'baseline', gap: 16, flexWrap: 'wrap' }}>
             <div className="dd-ticker" style={{ fontSize: 26 }}>
-              {top?.sector ?? '—'}
+              {cheapest.sector}
             </div>
             <div className="mono" style={{ fontSize: 32, fontWeight: 700, color: 'var(--gain)' }}>
-              {top?.sector_score?.toFixed(1) ?? '—'}
+              {cheapest.etf_pe ?? '—'}
+              <span style={{ fontSize: 15, color: 'var(--text-faint)' }}> P/E</span>
             </div>
-            <Pill kind={top?.confident_sample ? 'win' : 'neutral'}>
-              {top?.confident_sample ? `Confident sample · n=${top.constituent_count}` : `Small sample · n=${top?.constituent_count}`}
-            </Pill>
+            {cheapest.quadrant && (
+              <Pill kind={cheapest.quadrant === 'Leading' ? 'win' : cheapest.quadrant === 'Lagging' ? 'loss' : 'info'}>
+                {cheapest.quadrant}
+              </Pill>
+            )}
           </div>
           <p className="hero-sub" style={{ marginTop: 10, maxWidth: 640 }}>
-            {top?.buyable_count} of {top?.constituent_count} constituents ({top?.buyable_pct.toFixed(0)}%) currently
-            buyable — median composite score {top?.median_composite_score?.toFixed(1) ?? '—'} — led by{' '}
-            {top?.top_ticker ?? '—'} at {top?.top_ticker_score?.toFixed(1) ?? '—'}.
-          </p>
-          <p className="hero-sub" style={{ marginTop: 6, maxWidth: 640, color: 'var(--text-faint)', fontStyle: 'italic' }}>
-            {top?.valuation_read}
+            Cheapest P/E of the {cheapest.etf_pe_rank_of} sectors ranked (via {cheapest.etf_ticker}), real and live
+            from Yahoo Finance — not compared across markets, only within this one.
+            {cheapest.rel_strength_pct != null &&
+              ` 3-month relative strength vs Nifty: ${cheapest.rel_strength_pct >= 0 ? '+' : ''}${cheapest.rel_strength_pct}%.`}
           </p>
         </div>
       </div>
@@ -355,69 +340,20 @@ function BestSectorView() {
       <div className="section">
         <div className="section-head">
           <div className="section-title">
-            Sector Rankings <span className="count">within-universe, live</span>
+            Undervalued Sectors — Cheapest First <span className="count">by real ETF P/E, live</span>
           </div>
         </div>
         <div className="card">
-          <div className="table-scroll">
-            <table>
-              <thead>
-                <tr>
-                  <th className={`sortable ${arrow('score')}`} onClick={() => toggle('score')}>
-                    Rank<span className={`arrow ${arrow('score')}`} />
-                  </th>
-                  <th className="sortable" onClick={() => toggle('sector')}>
-                    Sector<span className={`arrow ${arrow('sector')}`} />
-                  </th>
-                  <th className="num sortable" onClick={() => toggle('n')}>
-                    Constituents<span className={`arrow ${arrow('n')}`} />
-                  </th>
-                  <th className="num sortable" onClick={() => toggle('buyable')}>
-                    Buyable %<span className={`arrow ${arrow('buyable')}`} />
-                  </th>
-                  <th className="num sortable" onClick={() => toggle('composite')}>
-                    Median Composite<span className={`arrow ${arrow('composite')}`} />
-                  </th>
-                  <th className="num sortable" onClick={() => toggle('pe')}>
-                    Median P/E<span className={`arrow ${arrow('pe')}`} />
-                  </th>
-                  <th className="num sortable" onClick={() => toggle('score')}>
-                    Sector Score<span className={`arrow ${arrow('score')}`} />
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {sorted.map((s, i) => (
-                  <tr key={s.sector}>
-                    <td>{s.confident_sample ? <Pill kind="win">#{i + 1}</Pill> : <Pill kind="neutral">n/a</Pill>}</td>
-                    <td className="ticker">
-                      {s.sector}
-                      <div className="company">
-                        {s.buyable_count} of {s.constituent_count} buyable — led by {s.top_ticker ?? '—'} at{' '}
-                        {s.top_ticker_score?.toFixed(1) ?? '—'}
-                      </div>
-                    </td>
-                    <td className="num">{s.constituent_count}</td>
-                    <td className="num">{s.buyable_pct.toFixed(0)}%</td>
-                    <td className="num">{s.median_composite_score?.toFixed(1) ?? '—'}</td>
-                    <td className="num">{s.median_pe?.toFixed(1) ?? '—'}</td>
-                    <td className="num">
-                      {s.sector_score != null && (
-                        <span className="barwrap">
-                          <span className="bar" style={{ width: `${Math.min(100, s.sector_score)}%` }} />
-                        </span>
-                      )}
-                      {s.sector_score?.toFixed(1) ?? '—'}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <SectorValuationTable rows={rows} hasStockData={hasStockData} />
         </div>
         <p className="footnote">
-          Computed by aggregating the live universe's own stock-level scores, grouped by sector — not scraped
-          index-level PE. Sectors under 3 constituents are shown but not score-ranked.
+          ETF P/E, P/B and dividend yield are real, live figures from each sector's own tracking ETF (BANKBEES,
+          ITBEES, etc.) via Yahoo Finance — sector PE is only ever compared within this one market, never across
+          markets. Momentum (RRG) shows relative strength vs Nifty 500 over 3 months and how that strength has
+          changed over the last month — Leading = outperforming and still accelerating, Improving = still behind but
+          gaining, Weakening = still ahead but fading, Lagging = behind and still fading.
+          {hasStockData &&
+            ' Constituents/Buyable%/Median Composite are the existing within-universe aggregation from the live stock screener.'}
         </p>
       </div>
     </>

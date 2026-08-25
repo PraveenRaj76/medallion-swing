@@ -101,7 +101,7 @@ export interface SectorRow {
   gics_equivalent: string
   constituent_count: number
   buyable_count: number
-  buyable_pct: number
+  buyable_pct: number | null
   median_composite_score: number | null
   median_fundamental_score: number | null
   median_technical_score: number | null
@@ -112,7 +112,17 @@ export interface SectorRow {
   top_ticker: string | null
   top_ticker_score: number | null
   why: string
-  valuation_read: string
+  valuation_read: string | null
+  etf_ticker: string | null
+  etf_pe: number | null
+  etf_pb: number | null
+  etf_dividend_yield: number | null
+  etf_pe_rank: number | null
+  etf_pe_rank_of: number | null
+  rel_strength_pct: number | null
+  rel_momentum_pct: number | null
+  quadrant: 'Leading' | 'Weakening' | 'Lagging' | 'Improving' | null
+  etf_only: boolean
 }
 
 export interface SectorsResponse {
