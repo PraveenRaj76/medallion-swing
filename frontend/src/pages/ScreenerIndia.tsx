@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, type CSSProperties } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { ApiError, getScreener, getSectors, postRefresh } from '../api/client'
 import type { ScreenerResponse, ScreenerRow, SectorsResponse } from '../types'
@@ -6,6 +6,9 @@ import { useAuth } from '../context/AuthContext'
 import { qualityPill, Pill } from '../components/Pill'
 import { TrendBadge } from '../components/TrendBadge'
 import { SectorValuationTable } from '../components/SectorValuationTable'
+import { ChecklistExplainer } from '../components/ChecklistExplainer'
+import { CountUp } from '../components/CountUp'
+import { FUNDAMENTAL_EXPLAINERS, TECHNICAL_EXPLAINERS, SECTOR_EXPLAINERS } from '../data/checklistExplainers'
 import { useSort } from '../hooks/useSort'
 
 function median(nums: number[]): number | null {
@@ -100,7 +103,7 @@ export function ScreenerIndia() {
   return (
     <>
       <div className="hero">
-        <div className="eyebrow">NIFTY 500 &middot; Quantamental Screener</div>
+        <div className="eyebrow">Indian Stocks Quantamental Screener</div>
         <h1>Which names actually clear the bar?</h1>
         <p className="hero-sub">
           Midcap 150 + Smallcap 50 swing universe, scored on the fundamental + technical checklist. Every row shows
@@ -135,25 +138,44 @@ export function ScreenerIndia() {
 
       {view === 'leaderboard' ? (
         <>
+          <ChecklistExplainer
+            title="Understand the Fundamental Checklist"
+            subtitle="What each of the 9 quality & value filters means, and why it's scored the way it is"
+            items={FUNDAMENTAL_EXPLAINERS}
+          />
+          <ChecklistExplainer
+            title="Understand the Technical Checklist"
+            subtitle="What each of the 8 trend & timing filters means, and why it's scored the way it is"
+            items={TECHNICAL_EXPLAINERS}
+          />
+
           <div className="kpi-row">
             <div className="kpi">
               <div className="kpi-label">Universe</div>
-              <div className="kpi-val">{data?.total_stocks ?? '—'}</div>
+              <div className="kpi-val">
+                <CountUp value={data?.total_stocks} />
+              </div>
               <div className="kpi-foot">Midcap 150 + Smallcap 50</div>
             </div>
             <div className="kpi">
               <div className="kpi-label">Ready Today</div>
-              <div className="kpi-val gain">{data?.ready_count ?? '—'}</div>
+              <div className="kpi-val gain">
+                <CountUp value={data?.ready_count} />
+              </div>
               <div className="kpi-foot">refreshed &middot; verified &middot; in-universe</div>
             </div>
             <div className="kpi">
               <div className="kpi-label">Buyable Now</div>
-              <div className="kpi-val">{buyableCount}</div>
+              <div className="kpi-val">
+                <CountUp value={buyableCount} />
+              </div>
               <div className="kpi-foot">close &gt; 200SMA &amp; RSI &le; 70</div>
             </div>
             <div className="kpi">
               <div className="kpi-label">Median Score</div>
-              <div className="kpi-val">{median(scores)?.toFixed(1) ?? '—'}</div>
+              <div className="kpi-val">
+                <CountUp value={median(scores)} decimals={1} />
+              </div>
               <div className="kpi-foot">composite, out of ~109</div>
             </div>
           </div>
@@ -310,7 +332,12 @@ function BestSectorView() {
   return (
     <>
       <div className="section" style={{ marginTop: 8 }}>
-        <div className="card" style={{ padding: '26px 28px' }}>
+        <div className="card crown-card">
+          <div className="crown-sparkles" aria-hidden="true">
+            {Array.from({ length: 14 }).map((_, i) => (
+              <span key={i} className="crown-sparkle" style={{ '--i': i } as CSSProperties} />
+            ))}
+          </div>
           <div className="eyebrow" style={{ marginBottom: 10 }}>
             Most Undervalued Sector Right Now
           </div>
@@ -318,8 +345,8 @@ function BestSectorView() {
             <div className="dd-ticker" style={{ fontSize: 26 }}>
               {cheapest.sector}
             </div>
-            <div className="mono" style={{ fontSize: 32, fontWeight: 700, color: 'var(--gain)' }}>
-              {cheapest.etf_pe ?? '—'}
+            <div className="mono crown-value">
+              <CountUp value={cheapest.etf_pe} decimals={2} />
               <span style={{ fontSize: 15, color: 'var(--text-faint)' }}> P/E</span>
             </div>
             {cheapest.quadrant && (
@@ -336,6 +363,12 @@ function BestSectorView() {
           </p>
         </div>
       </div>
+
+      <ChecklistExplainer
+        title="Understand the Sector Undervaluation Checklist"
+        subtitle="What ETF P/E, momentum and the other columns below actually mean, and where each number comes from"
+        items={SECTOR_EXPLAINERS}
+      />
 
       <div className="section">
         <div className="section-head">

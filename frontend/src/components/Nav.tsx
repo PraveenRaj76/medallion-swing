@@ -8,7 +8,7 @@ export function Nav({ onOpenCmdk }: { onOpenCmdk: () => void }) {
   return (
     <nav>
       <div className="brand">
-        <MedallionLogo size={28} variant="icon" />
+        <MedallionLogo size={34} variant="icon" />
         <span>MEDALLION SWING</span>
       </div>
       <div className="navlinks" role="tablist" aria-label="Pages">

@@ -1,13 +1,17 @@
-import logo from '../assets/medallion-logo-cropped.png'
+import heroLogo from '../assets/medallion-logo-cropped.png'
+import iconLogo from '../assets/medallion-icon.png'
 
 /**
- * Source asset is medallion-logo-cropped.png — the original artwork with
- * the ribbon trimmed to its bottom ~25% (just the stub sitting above the
- * crest) and the black background chroma-keyed to real alpha transparency
- * (Pillow, decontaminated edges — see the asset's generation notes in the
- * project history). variant "hero" shows the full artwork (ribbon stub +
- * medal) for the login screen. variant "icon" crops to just the coin
- * circle for the small navbar mark.
+ * Two dedicated assets, not one image reused at different sizes:
+ *   - medallion-logo-cropped.png ("hero"): ribbon trimmed to its bottom
+ *     ~25% stub above the crest, for the login screen.
+ *   - medallion-icon.png ("icon"): just the coin disc, no ribbon at all,
+ *     pre-shrunk to 160px with Lanczos + a light unsharp mask.
+ * The icon used to be the hero image cropped live via object-fit — at
+ * nav size (~28-34px) that left a stray bit of the ribbon hook poking
+ * above the circle and the fine engraving turned to mush from a single
+ * huge live downscale. A separate, tightly-cropped, pre-sharpened asset
+ * fixes both — see the project history for the before/after render.
  */
 export function MedallionLogo({
   size = 130,
@@ -30,14 +34,9 @@ export function MedallionLogo({
         }}
       >
         <img
-          src={logo}
+          src={iconLogo}
           alt="Medallion Swing"
-          style={{
-            width: '100%',
-            height: '100%',
-            objectFit: 'cover',
-            objectPosition: '50% 100%',
-          }}
+          style={{ width: '100%', height: '100%', objectFit: 'cover' }}
         />
       </span>
     )
@@ -45,7 +44,7 @@ export function MedallionLogo({
 
   return (
     <img
-      src={logo}
+      src={heroLogo}
       alt="Medallion Swing"
       width={size}
       style={{ width: size, height: 'auto', objectFit: 'contain', display: 'block', margin: '0 auto' }}

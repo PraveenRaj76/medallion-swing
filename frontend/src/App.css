@@ -1,9 +1,14 @@
 .wrap {
   position: relative;
   z-index: 1;
-  max-width: 1220px;
+  max-width: 1680px;
   margin: 0 auto;
-  padding: 0 32px 90px;
+  padding: 0 48px 90px;
+}
+@media (max-width: 1400px) {
+  .wrap {
+    padding: 0 32px 90px;
+  }
 }
 
 /* NAV */
@@ -37,7 +42,8 @@ nav {
   padding: 4px;
   overflow-x: auto;
 }
-.navlinks button {
+.navlinks button,
+.navlinks a {
   font-size: 13px;
   color: var(--text-dim);
   background: none;
@@ -46,17 +52,26 @@ nav {
   border-radius: 10px;
   transition: transform 0.15s, color 0.2s, background 0.2s;
   font-family: 'Inter', sans-serif;
+  font-weight: 500;
   white-space: nowrap;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  cursor: pointer;
 }
-.navlinks button.active {
+.navlinks button.active,
+.navlinks a.active {
   color: var(--bg);
   background: var(--gold);
   font-weight: 600;
 }
-.navlinks button:not(.active):hover {
+.navlinks button:not(.active):hover,
+.navlinks a:not(.active):hover {
   color: var(--text);
+  text-decoration: none;
 }
-.navlinks button:active {
+.navlinks button:active,
+.navlinks a:active {
   transform: scale(0.96);
 }
 .navspacer {
@@ -1324,4 +1339,240 @@ td.ticker {
   max-width: 480px;
   margin: 0 auto;
   line-height: 1.6;
+}
+
+/* ---------- checklist explainer ---------- */
+.explainer-toggle {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  text-align: left;
+  background: var(--surface);
+  backdrop-filter: blur(20px);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 16px 20px;
+  transition: border-color 0.2s, box-shadow 0.25s;
+  position: relative;
+  overflow: hidden;
+}
+.explainer-toggle::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(420px circle at var(--mx, 50%) 0%, rgba(228, 183, 92, 0.12), transparent 60%);
+  opacity: 0;
+  transition: opacity 0.3s;
+  pointer-events: none;
+}
+.explainer-toggle:hover {
+  border-color: var(--border-2);
+  box-shadow: 0 0 0 1px rgba(228, 183, 92, 0.15), 0 20px 50px -24px rgba(228, 183, 92, 0.25);
+}
+.explainer-toggle:hover::before {
+  opacity: 1;
+}
+.explainer-toggle-icon {
+  flex-shrink: 0;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: var(--gold-dim);
+  color: var(--gold);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 17px;
+  font-weight: 700;
+  font-family: 'JetBrains Mono', monospace;
+}
+.explainer-toggle strong {
+  display: block;
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+}
+.explainer-toggle-sub {
+  display: block;
+  font-size: 12.5px;
+  color: var(--text-faint);
+  margin-top: 2px;
+}
+.explainer-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+  gap: 12px;
+  margin-top: 14px;
+  animation: explainerReveal 0.35s ease both;
+}
+@keyframes explainerReveal {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.explainer-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  transition: border-color 0.2s;
+}
+.explainer-card.open {
+  border-color: rgba(228, 183, 92, 0.35);
+}
+.explainer-card-head {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 13px 16px;
+  text-align: left;
+  background: none;
+  border: none;
+}
+.explainer-num {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  color: var(--gold);
+  font-weight: 700;
+  flex-shrink: 0;
+}
+.explainer-title {
+  flex: 1;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--text);
+}
+.explainer-max {
+  font-size: 11px;
+  color: var(--text-faint);
+}
+.explainer-chevron {
+  flex-shrink: 0;
+  color: var(--text-faint);
+  transition: transform 0.2s;
+}
+.explainer-card.open .explainer-chevron {
+  transform: rotate(180deg);
+  color: var(--gold);
+}
+.explainer-body {
+  padding: 0 16px 16px;
+  animation: explainerReveal 0.25s ease both;
+}
+.explainer-row {
+  margin-bottom: 10px;
+}
+.explainer-row:last-child {
+  margin-bottom: 0;
+}
+.explainer-label {
+  display: block;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: var(--gold-soft);
+  margin-bottom: 3px;
+}
+.explainer-row p {
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--text-dim);
+  margin: 0;
+}
+.explainer-scoring {
+  font-size: 11.5px !important;
+  color: var(--text) !important;
+  background: var(--surface-3);
+  border-radius: 7px;
+  padding: 8px 10px;
+  line-height: 1.6 !important;
+}
+
+/* ---------- crown card (most undervalued sector) — sparkle magic ---------- */
+.crown-card {
+  position: relative;
+  padding: 26px 28px;
+  overflow: hidden;
+  border-image: none;
+  background:
+    linear-gradient(var(--surface), var(--surface)) padding-box,
+    linear-gradient(120deg, rgba(228, 183, 92, 0.55), rgba(122, 58, 110, 0.3), rgba(228, 183, 92, 0.55)) border-box;
+  border: 1px solid transparent;
+  background-size: 100% 100%, 220% 220%;
+  animation: crownBorderDrift 8s ease-in-out infinite;
+}
+@keyframes crownBorderDrift {
+  0%,
+  100% {
+    background-position: 0% 0%, 0% 50%;
+  }
+  50% {
+    background-position: 0% 0%, 100% 50%;
+  }
+}
+.crown-value {
+  font-size: 32px;
+  font-weight: 700;
+  color: var(--gain);
+  text-shadow: 0 0 18px rgba(111, 207, 151, 0.5);
+  animation: crownGlow 2.4s ease-in-out infinite;
+}
+@keyframes crownGlow {
+  0%,
+  100% {
+    text-shadow: 0 0 12px rgba(111, 207, 151, 0.35);
+  }
+  50% {
+    text-shadow: 0 0 22px rgba(111, 207, 151, 0.65);
+  }
+}
+.crown-sparkles {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+.crown-sparkle {
+  position: absolute;
+  left: calc((var(--i) * 7.3%) + 2%);
+  bottom: -6px;
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: var(--gold);
+  box-shadow: 0 0 6px 1px rgba(228, 183, 92, 0.8);
+  opacity: 0;
+  animation: crownFloat calc(4s + (var(--i) * 0.6s)) ease-in calc(var(--i) * 0.5s) infinite;
+}
+@keyframes crownFloat {
+  0% {
+    transform: translateY(0) scale(0.6);
+    opacity: 0;
+  }
+  10% {
+    opacity: 0.9;
+  }
+  80% {
+    opacity: 0.5;
+  }
+  100% {
+    transform: translateY(-120px) scale(1.1);
+    opacity: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .crown-card,
+  .crown-value,
+  .crown-sparkle {
+    animation: none !important;
+  }
 }

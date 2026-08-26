@@ -356,11 +356,17 @@ def row_has_live_price(row: Any) -> bool:
 
 
 def row_has_technicals(row: Any) -> bool:
+    # delivery_pct_10d is deliberately NOT required here: since the bhavcopy
+    # fix (2026-08-24) it's a real NSE figure that's honestly None when that
+    # ticker genuinely has no delivery data in the scan window — the same
+    # factor_engine.py checklist already treats that as a non-blocking
+    # skip (0/0 marks), not a failure. Requiring it here predates that fix
+    # and was silently keeping otherwise fully-scored, real rows out of
+    # "Ready Today" forever whenever delivery data happened to be missing.
     sma50 = _num(row, "sma_50")
     sma200 = _num(row, "sma_200")
     rsi = _num(row, "rsi_14")
     atr = _num(row, "atr_value")
-    delivery = _num(row, "delivery_pct_10d")
     return (
         sma50 is not None
         and sma200 is not None
@@ -368,7 +374,6 @@ def row_has_technicals(row: Any) -> bool:
         and rsi is not None
         and atr is not None
         and atr > 0
-        and delivery is not None
     )
 
 
@@ -1168,6 +1173,16 @@ def refresh_verified_live(
         result["reject_reasons"] = reasons
         if user_id is not None:
             result["clearances"] = validate_active_signals(int(user_id))
+        # Bug fixed 2026-08-26: this live-mode path saved real rows but never
+        # updated META_SCREENER_AS_OF, so screener_is_today() (and therefore
+        # filter_display_ready/"Ready Today") stayed permanently 0 no matter
+        # how much fresh data actually loaded — only the mock-mode branch
+        # above and the separate job-queue refresh function called this.
+        db.set_screener_refresh_state(
+            as_of=db.today_ist(),
+            status="complete",
+            message=f"Live refresh — {len(accepted_rows)}/{len(symbols)} stocks saved.",
+        )
         ready_n = len(filter_display_ready(db.get_leaderboard(limit=1000)))
         elapsed = round(time.time() - t0, 1)
         result["message"] = (
