@@ -496,15 +496,31 @@ def list_incomplete_tickers(limit: int = 40, *, skip_exhausted: bool = True) -> 
     return out
 
 
-def filter_display_ready(frame: Optional[pd.DataFrame]) -> pd.DataFrame:
-    """Empty unless today's refresh; only fully complete swing-universe rows."""
+def filter_display_ready(frame: Optional[pd.DataFrame], market: str = "IN") -> pd.DataFrame:
+    """Empty unless today's refresh; only fully complete swing-universe rows.
+
+    market picks which universe list a ticker must belong to — without
+    this, a US row would always fail the India universe membership check
+    (and vice versa), so calling this on a mixed or US-only frame with the
+    old India-only default silently zeroed out every US row regardless of
+    how complete its data actually was.
+    """
     if frame is None or frame.empty:
         return pd.DataFrame()
     if not db.screener_is_today():
         return pd.DataFrame()
-    universe = {nse.normalize_ticker(t) for t in nse.load_universe()}
+    if market.upper() == "US":
+        import us_data_provider as usdp
+
+        # load_universe() returns dicts (ticker, company_name, sector, ...),
+        # not plain strings like nse.load_universe() — pull the ticker out.
+        universe = {u["ticker"] for u in usdp.load_universe()}
+        normalize = usdp.normalize_ticker
+    else:
+        universe = {nse.normalize_ticker(t) for t in nse.load_universe()}
+        normalize = nse.normalize_ticker
     mask = frame.apply(
-        lambda r: nse.normalize_ticker(str(r.get("ticker") or "")) in universe
+        lambda r: normalize(str(r.get("ticker") or "")) in universe
         and row_is_fully_verified(r),
         axis=1,
     )
@@ -1193,6 +1209,40 @@ def refresh_verified_live(
     except Exception as exc:
         logger.error("refresh_verified_live failed: %s", exc)
         result["message"] = f"Refresh failed: {exc}"
+    return result
+
+
+def refresh_us_verified_live(tickers: Optional[List[str]] = None, user_id: Optional[int] = None) -> Dict[str, Any]:
+    """Real, live US refresh — SEC EDGAR fundamentals + Yahoo Finance
+    price/technicals, scored through factor_engine_us, then saved with
+    market='US'. Mirrors refresh_verified_live's shape (attempted/accepted/
+    rejected/message) so the same frontend refresh-status handling works
+    for both markets."""
+    import us_data_provider as usdp
+
+    result: Dict[str, Any] = {
+        "attempted": 0,
+        "accepted": 0,
+        "rejected": [],
+        "reject_reasons": {},
+        "clearances": [],
+        "message": "",
+        "market": "US",
+    }
+    try:
+        outcome = usdp.refresh_universe(tickers=tickers)
+        rows = outcome.pop("rows", [])
+        result.update(outcome)
+        for i in range(0, len(rows), 50):
+            db.upsert_leaderboard_rows(rows[i : i + 50])
+        if user_id is not None:
+            result["clearances"] = validate_active_signals(int(user_id))
+        db.set_screener_refresh_state(as_of=db.today_ist(), status="complete", message=result["message"])
+        ready_n = len(filter_display_ready(db.get_leaderboard(limit=1000, market="US"), market="US"))
+        result["message"] += f" table showing {ready_n}."
+    except Exception as exc:
+        logger.error("refresh_us_verified_live failed: %s", exc)
+        result["message"] = f"US refresh failed: {exc}"
     return result
 
 

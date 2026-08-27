@@ -24,6 +24,8 @@ router = APIRouter()
 @router.post("/refresh")
 def post_refresh(body: RefreshRequest):
     uid = default_user_id(body.user_id)
+    if body.market.upper() == "US":
+        return pipeline.refresh_us_verified_live(tickers=body.tickers, user_id=uid)
     result = pipeline.refresh_verified_live(
         tickers=body.tickers,
         user_id=uid,

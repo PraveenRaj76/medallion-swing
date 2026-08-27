@@ -18,6 +18,7 @@ class RefreshRequest(BaseModel):
     )
     full_universe: bool = True
     with_fundamentals: bool = False
+    market: str = Field(default="IN", description="'IN' or 'US' — which universe/pipeline to refresh.")
     user_id: Optional[int] = None
 
 

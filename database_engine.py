@@ -789,11 +789,17 @@ def leaderboard_is_empty() -> bool:
         return True
 
 
-def leaderboard_count() -> int:
+def leaderboard_count(market: Optional[str] = None) -> int:
     try:
         with get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT COUNT(*) AS cnt FROM screener_leaderboard")
+            if market:
+                cursor.execute(
+                    "SELECT COUNT(*) AS cnt FROM screener_leaderboard WHERE UPPER(COALESCE(market, 'IN')) = ?",
+                    (market.upper(),),
+                )
+            else:
+                cursor.execute("SELECT COUNT(*) AS cnt FROM screener_leaderboard")
             return int(cursor.fetchone()["cnt"])
     except Exception as exc:
         logger.error("leaderboard_count failed: %s", exc)
@@ -1000,14 +1006,27 @@ def get_username(user_id: int) -> Optional[str]:
         return None
 
 
-def get_leaderboard(limit: int = 1000) -> pd.DataFrame:
+def get_leaderboard(limit: int = 1000, market: Optional[str] = None) -> pd.DataFrame:
+    """market=None returns every row regardless of market (existing
+    callers' behavior, unchanged) — pass 'IN' or 'US' to scope to one,
+    which matters now that both live in the same table: without this, an
+    India-only caller would silently start seeing US rows mixed in (or
+    vice versa) the moment the other market had any data at all."""
     try:
         with get_connection() as conn:
-            df = pd.read_sql_query(
-                "SELECT * FROM screener_leaderboard ORDER BY composite_score DESC LIMIT ?",
-                conn,
-                params=(limit,),
-            )
+            if market:
+                df = pd.read_sql_query(
+                    "SELECT * FROM screener_leaderboard WHERE UPPER(COALESCE(market, 'IN')) = ? "
+                    "ORDER BY composite_score DESC LIMIT ?",
+                    conn,
+                    params=(market.upper(), limit),
+                )
+            else:
+                df = pd.read_sql_query(
+                    "SELECT * FROM screener_leaderboard ORDER BY composite_score DESC LIMIT ?",
+                    conn,
+                    params=(limit,),
+                )
         return df
     except Exception as exc:
         logger.error("get_leaderboard failed: %s", exc)

@@ -66,12 +66,14 @@ export function getScreener(params: {
   min_score?: number
   sector?: string
   ready_only?: boolean
+  market?: 'IN' | 'US'
 }) {
   const qs = new URLSearchParams()
   if (params.limit) qs.set('limit', String(params.limit))
   if (params.min_score) qs.set('min_score', String(params.min_score))
   if (params.sector) qs.set('sector', params.sector)
   if (params.ready_only) qs.set('ready_only', 'true')
+  if (params.market) qs.set('market', params.market)
   return request<ScreenerResponse>(`/api/screener?${qs.toString()}`)
 }
 
@@ -94,6 +96,7 @@ export function postRefresh(body: {
   tickers?: string[]
   full_universe?: boolean
   with_fundamentals?: boolean
+  market?: 'IN' | 'US'
   user_id?: number
 }) {
   return request<Record<string, unknown>>('/api/refresh', {
