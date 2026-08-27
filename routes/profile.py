@@ -160,6 +160,13 @@ def get_profile(
             row = nse.build_live_row(ticker, prior=prior_dict)
             if row is None:
                 raise HTTPException(status_code=404, detail=f"No live data available for {ticker} right now.")
+            # pe_peer_percentile (see factor_engine.compute_peer_relative_valuation)
+            # is a whole-universe ranking computed once per refresh, not
+            # something a single live-ticker fetch can recompute on its own —
+            # carry the last refresh's value forward so a live search doesn't
+            # silently lose the "PE vs sector peers" checklist item.
+            if row.get("pe_peer_percentile") is None and prior_dict is not None:
+                row["pe_peer_percentile"] = prior_dict.get("pe_peer_percentile")
             source = "live"
         else:
             if prior_dict is None:

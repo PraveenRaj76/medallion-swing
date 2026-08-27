@@ -591,6 +591,11 @@ def _ensure_leaderboard_extra_columns(cursor: sqlite3.Cursor) -> None:
         # Defaults to 'IN' since every row written before this migration is
         # India-only; nothing before this had any other market to be.
         "market": "TEXT DEFAULT 'IN'",
+        # Where this stock's PE ranks (0-100) against same-sector-pack peers
+        # in the current universe — see factor_engine.compute_peer_relative_valuation().
+        # India-only; left NULL for US rows and for any stock whose pack had
+        # too few peers (<5) to rank meaningfully.
+        "pe_peer_percentile": "REAL",
     }
     for name, decl in additions.items():
         if name not in cols:
@@ -1164,6 +1169,15 @@ def upsert_leaderboard_rows(rows: List[Dict[str, Any]]) -> bool:
                     prev_close = float(prev_close) if prev_close is not None else None
                 except (TypeError, ValueError):
                     prev_close = None
+                pe_peer_percentile = row.get("pe_peer_percentile")
+                try:
+                    pe_peer_percentile = (
+                        float(pe_peer_percentile)
+                        if pe_peer_percentile is not None and pd.notna(pe_peer_percentile)
+                        else None
+                    )
+                except (TypeError, ValueError):
+                    pe_peer_percentile = None
                 cursor.execute(
                     """
                     INSERT INTO screener_leaderboard (
@@ -1174,8 +1188,8 @@ def upsert_leaderboard_rows(rows: List[Dict[str, Any]]) -> bool:
                         promoter_pledge_pct, yoy_profit_growth, sma_50, sma_200,
                         rsi_14, delivery_pct_10d, alpha_3m,
                         pe_ratio, pb_ratio, roe, data_quality, fundamentals_verified, sources_ok_count,
-                        ohlcv_ready, price_source, price_kind, prev_close, market
-                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                        ohlcv_ready, price_source, price_kind, prev_close, market, pe_peer_percentile
+                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                     ON CONFLICT(ticker) DO UPDATE SET
                         company_name=excluded.company_name,
                         description=excluded.description,
@@ -1209,7 +1223,8 @@ def upsert_leaderboard_rows(rows: List[Dict[str, Any]]) -> bool:
                         price_source=COALESCE(excluded.price_source, screener_leaderboard.price_source),
                         price_kind=COALESCE(excluded.price_kind, screener_leaderboard.price_kind),
                         prev_close=COALESCE(excluded.prev_close, screener_leaderboard.prev_close),
-                        market=excluded.market
+                        market=excluded.market,
+                        pe_peer_percentile=COALESCE(excluded.pe_peer_percentile, screener_leaderboard.pe_peer_percentile)
                     """,
                     (
                         row["ticker"], row.get("company_name", row["ticker"]),
@@ -1234,6 +1249,7 @@ def upsert_leaderboard_rows(rows: List[Dict[str, Any]]) -> bool:
                         price_kind,
                         prev_close,
                         str(row.get("market") or "IN").upper(),
+                        pe_peer_percentile,
                     ),
                 )
         return True

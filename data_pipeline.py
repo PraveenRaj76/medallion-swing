@@ -1097,6 +1097,12 @@ def refresh_verified_live(
                 if (d.get("technical_score") or 0) <= 0:
                     d["technical_score"] = 40.0
                 tagged.append(d)
+            if tagged:
+                import factor_engine as factors
+
+                peer_df = factors.compute_peer_relative_valuation(pd.DataFrame(tagged))
+                if peer_df is not None and "pe_peer_percentile" in peer_df.columns:
+                    tagged = peer_df.to_dict("records")
             db.upsert_leaderboard_rows(tagged)
         db.set_screener_refresh_state(
             as_of=db.today_ist(),
@@ -1180,6 +1186,22 @@ def refresh_verified_live(
             else:
                 rejected.append(sym)
                 reasons[sym] = "row build failed"
+
+        # Peer-relative PE percentile only means anything computed across the
+        # whole batch at once (rank against sector-pack peers), so this runs
+        # once here — before the upsert is split into 50-row chunks purely
+        # for SQL statement size, not for this calculation. See
+        # factor_engine.compute_peer_relative_valuation(); rows whose pack
+        # has fewer than 5 peers in this batch simply get no percentile
+        # (upsert's COALESCE keeps whatever value was already stored, so a
+        # small/partial refresh doesn't blank out a good value from an
+        # earlier full-universe refresh).
+        if accepted_rows:
+            import factor_engine as factors
+
+            peer_df = factors.compute_peer_relative_valuation(pd.DataFrame(accepted_rows))
+            if peer_df is not None and "pe_peer_percentile" in peer_df.columns:
+                accepted_rows = peer_df.to_dict("records")
 
         for i in range(0, len(accepted_rows), 50):
             db.upsert_leaderboard_rows(accepted_rows[i : i + 50])
