@@ -31,7 +31,7 @@ export interface Checklist {
   composite_max: number
   composite_pct: number
   sector_pack: string
-  qvt: QVT
+  qvt?: QVT
 }
 
 export interface BuySignalGate {
@@ -47,15 +47,71 @@ export interface BuySignal {
   blocked_by: string[]
 }
 
+export interface Quote {
+  price: number | null
+  prev_close: number | null
+  open: number | null
+  day_high: number | null
+  day_low: number | null
+  volume: number | null
+  week52_high: number | null
+  week52_low: number | null
+  day_change: number | null
+  day_change_pct: number | null
+  price_kind: string
+  source: string
+  fetched_at: string | null
+}
+
+export interface TradeLevels {
+  stop_loss: number
+  target: number
+  risk: number
+  reward: number
+  rrr: number
+  quantity: number
+  recommended_quantity_at_1pct_risk: number
+}
+
+export interface ActivePosition {
+  position_id: number
+  user_id: number
+  ticker: string
+  entry_timestamp: string
+  entry_price: number
+  stop_loss: number
+  target: number
+  quantity: number
+  current_price: number | null
+  unrealized_pnl: number | null
+  atr_at_entry: number | null
+  initial_stop_loss: number | null
+  highest_price_since_entry: number | null
+  trail_phase: string | null
+  market: string
+}
+
+export interface PricePoint {
+  date: string | null
+  close: number | null
+  sma_50: number | null
+  sma_200: number | null
+}
+
 export interface ProfileResponse {
   ticker: string
   company_name: string | null
   sector: string | null
   industry: string | null
+  market: 'IN' | 'US'
   close_price: number | null
   data_quality: string | null
   fundamentals_verified: number | null
   source: 'live' | 'cached'
+  quote: Quote
+  trade_levels: TradeLevels | null
+  active_position: ActivePosition | null
+  price_history: PricePoint[]
   checklist: Checklist
   buy_signal: BuySignal
   raw: Record<string, unknown>

@@ -506,6 +506,13 @@ def build_live_row(ticker: str, bench_frame: Optional[pd.DataFrame] = None) -> O
         "ohlcv_ready": True,
         "price_source": "yahoo",
         "price_kind": "LAST",
+        "week52_high": round(float(frame["high"].tail(252).max()), 2),
+        "week52_low": round(float(frame["low"].tail(252).min()), 2),
+        "day_open": round(float(frame["open"].iloc[-1]), 2),
+        "day_high": round(float(frame["high"].iloc[-1]), 2),
+        "day_low": round(float(frame["low"].iloc[-1]), 2),
+        "day_volume": float(frame["volume"].iloc[-1]) if "volume" in frame.columns else None,
+        "prev_close": round(float(frame["close"].iloc[-2]), 2) if len(frame) >= 2 else None,
     }
     return row
 

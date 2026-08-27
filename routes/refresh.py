@@ -38,10 +38,18 @@ def post_refresh(body: RefreshRequest):
 @router.post("/trade")
 def post_open_trade(body: TradeOpenRequest):
     uid = default_user_id(body.user_id)
-    # ATR seeds the chandelier trailing stop (see data_pipeline.compute_trailing_stop) —
-    # looked up server-side from the cached leaderboard row so callers don't need to know it.
-    row = db.get_ticker_row(body.ticker)
-    atr = float(row["atr_value"]) if row is not None and row.get("atr_value") is not None else None
+    market = (body.market or "IN").upper()
+    # ATR seeds the chandelier trailing stop (see data_pipeline.compute_trailing_stop).
+    # Prefer whatever the caller just fetched live (Search Profile always sends this —
+    # it's the same ATR the suggested stop/target were built from); fall back to a
+    # cached leaderboard lookup only for older/other callers that don't pass one.
+    # NOTE: get_ticker_row is market-scoped since India and US share one leaderboard
+    # table keyed by ticker — without it a US ticker's ATR lookup could silently read
+    # an unrelated India row (or vice versa) if the same string ever existed in both.
+    atr = body.atr
+    if atr is None:
+        row = db.get_ticker_row(body.ticker, market=market)
+        atr = float(row["atr_value"]) if row is not None and row.get("atr_value") is not None else None
     ok, message = db.open_signal(
         user_id=uid,
         ticker=body.ticker,
@@ -49,6 +57,7 @@ def post_open_trade(body: TradeOpenRequest):
         stop_loss=body.stop_loss,
         target=body.target,
         atr=atr,
+        market=market,
     )
     if not ok:
         raise HTTPException(status_code=400, detail=message)

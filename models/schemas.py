@@ -27,6 +27,10 @@ class TradeOpenRequest(BaseModel):
     entry_price: float
     stop_loss: float
     target: float
+    atr: Optional[float] = Field(
+        default=None, description="ATR at entry, seeds the trailing stop. Pass the value shown on Search Profile."
+    )
+    market: str = Field(default="IN", description="'IN' or 'US' — informational only; positions aren't market-scoped in the DB.")
     user_id: Optional[int] = None
 
 

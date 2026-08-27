@@ -1724,9 +1724,9 @@ def _equity_curve_max_drawdown(trade_rows: List[Dict[str, Any]]) -> Dict[str, Op
     return {"max_drawdown_rupee": round(max_dd, 2), "max_drawdown_pct": round(max_dd_pct, 1)}
 
 
-def compute_forward_test_scorecard(user_id: int) -> Dict[str, Any]:
-    closed = db.get_closed_trades(user_id)
-    active = db.get_active_positions(user_id)
+def compute_forward_test_scorecard(user_id: int, market: Optional[str] = None) -> Dict[str, Any]:
+    closed = db.get_closed_trades(user_id, market=market)
+    active = db.get_active_positions(user_id, market=market)
     total = 0 if closed is None or closed.empty else len(closed)
     successful = 0
     bad = 0

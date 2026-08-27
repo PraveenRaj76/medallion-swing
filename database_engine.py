@@ -607,10 +607,22 @@ def _ensure_active_positions_extra_columns(cursor: sqlite3.Cursor) -> None:
         "initial_stop_loss": "REAL",
         "highest_price_since_entry": "REAL",
         "trail_phase": "TEXT DEFAULT 'initial'",
+        # Every position opened before Search Profile could open US trades
+        # was necessarily India — default keeps those rows correctly labeled.
+        "market": "TEXT DEFAULT 'IN'",
     }
     for name, decl in additions.items():
         if name not in cols:
             cursor.execute(f"ALTER TABLE active_positions ADD COLUMN {name} {decl}")
+
+
+def _ensure_closed_trades_extra_columns(cursor: sqlite3.Cursor) -> None:
+    """Additive migration — see _ensure_active_positions_extra_columns."""
+    if not _table_exists(cursor, "closed_trades_history"):
+        return
+    cols = set(_table_columns(cursor, "closed_trades_history"))
+    if "market" not in cols:
+        cursor.execute("ALTER TABLE closed_trades_history ADD COLUMN market TEXT DEFAULT 'IN'")
 
 
 def init_database() -> bool:
@@ -733,6 +745,7 @@ def init_database() -> bool:
                 )
                 """
             )
+            _ensure_closed_trades_extra_columns(cursor)
 
             cursor.execute("SELECT COUNT(*) AS cnt FROM screener_leaderboard")
             if int(cursor.fetchone()["cnt"]) == 0:
@@ -1033,15 +1046,16 @@ def get_leaderboard(limit: int = 1000, market: Optional[str] = None) -> pd.DataF
         return pd.DataFrame()
 
 
-def get_ticker_row(ticker: str) -> Optional[pd.Series]:
+def get_ticker_row(ticker: str, market: Optional[str] = None) -> Optional[pd.Series]:
     ticker = (ticker or "").strip().upper()
     try:
         with get_connection() as conn:
-            df = pd.read_sql_query(
-                "SELECT * FROM screener_leaderboard WHERE ticker = ? LIMIT 1",
-                conn,
-                params=(ticker,),
-            )
+            query = "SELECT * FROM screener_leaderboard WHERE ticker = ?"
+            params: Tuple[Any, ...] = (ticker,)
+            if market:
+                query += " AND UPPER(COALESCE(market, 'IN')) = ?"
+                params = (ticker, market.upper())
+            df = pd.read_sql_query(query + " LIMIT 1", conn, params=params)
         if not df.empty:
             return df.iloc[0]
         market_mode = os.environ.get("MEDALLION_MARKET_MODE", "live").strip().lower()
@@ -1291,42 +1305,45 @@ def universe_leaderboard_count(universe: List[str]) -> int:
         return 0
 
 
-def get_active_positions(user_id: int) -> pd.DataFrame:
+def get_active_positions(user_id: int, market: Optional[str] = None) -> pd.DataFrame:
     try:
         with get_connection() as conn:
-            return pd.read_sql_query(
-                """
+            query = """
                 SELECT position_id, user_id, ticker, entry_timestamp, entry_price,
                        stop_loss, target, quantity, current_price, unrealized_pnl,
-                       atr_at_entry, initial_stop_loss, highest_price_since_entry, trail_phase
+                       atr_at_entry, initial_stop_loss, highest_price_since_entry, trail_phase,
+                       COALESCE(market, 'IN') AS market
                 FROM active_positions
                 WHERE user_id = ?
-                ORDER BY entry_timestamp DESC
-                """,
-                conn,
-                params=(user_id,),
-            )
+            """
+            params: Tuple[Any, ...] = (user_id,)
+            if market:
+                query += " AND UPPER(COALESCE(market, 'IN')) = ?"
+                params = (user_id, market.upper())
+            query += " ORDER BY entry_timestamp DESC"
+            return pd.read_sql_query(query, conn, params=params)
     except Exception as exc:
         logger.error("get_active_positions failed: %s", exc)
         return pd.DataFrame()
 
 
-def get_closed_trades(user_id: int, limit: int = 500) -> pd.DataFrame:
+def get_closed_trades(user_id: int, limit: int = 500, market: Optional[str] = None) -> pd.DataFrame:
     try:
         with get_connection() as conn:
-            return pd.read_sql_query(
-                """
+            query = """
                 SELECT id, user_id, ticker, entry_timestamp, exit_timestamp,
                        entry_price, exit_price, quantity, final_pnl,
-                       exit_reason, exit_status
+                       exit_reason, exit_status, COALESCE(market, 'IN') AS market
                 FROM closed_trades_history
                 WHERE user_id = ?
-                ORDER BY exit_timestamp DESC
-                LIMIT ?
-                """,
-                conn,
-                params=(user_id, limit),
-            )
+            """
+            params: Tuple[Any, ...] = (user_id,)
+            if market:
+                query += " AND UPPER(COALESCE(market, 'IN')) = ?"
+                params = (user_id, market.upper())
+            query += " ORDER BY exit_timestamp DESC LIMIT ?"
+            params = params + (limit,)
+            return pd.read_sql_query(query, conn, params=params)
     except Exception as exc:
         logger.error("get_closed_trades failed: %s", exc)
         return pd.DataFrame()
@@ -1339,6 +1356,7 @@ def open_signal(
     stop_loss: float,
     target: float,
     atr: Optional[float] = None,
+    market: str = "IN",
 ) -> Tuple[bool, str]:
     """Open a forward-test signal at fixed Quantity = 1. Capital is irrelevant.
 
@@ -1348,6 +1366,8 @@ def open_signal(
     callers that predate the trailing-stop redesign; those positions simply
     keep their fixed initial stop (no ratcheting) until re-opened with an ATR.
     """
+    market = (market or "IN").upper()
+    currency = "₹" if market == "IN" else "$"
     try:
         with get_connection() as conn:
             cursor = conn.cursor()
@@ -1367,8 +1387,8 @@ def open_signal(
                 INSERT INTO active_positions (
                     user_id, ticker, entry_timestamp, entry_price, stop_loss, target,
                     quantity, current_price, unrealized_pnl,
-                    atr_at_entry, initial_stop_loss, highest_price_since_entry, trail_phase
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0.0, ?, ?, ?, 'initial')
+                    atr_at_entry, initial_stop_loss, highest_price_since_entry, trail_phase, market
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0.0, ?, ?, ?, 'initial', ?)
                 """,
                 (
                     user_id,
@@ -1382,9 +1402,10 @@ def open_signal(
                     float(atr) if atr is not None else None,
                     float(stop_loss),
                     float(entry_price),
+                    market,
                 ),
             )
-        return True, f"Tracked 1 share of {ticker.upper()} @ ₹{entry_price:.2f}."
+        return True, f"Tracked 1 share of {ticker.upper()} @ {currency}{entry_price:.2f}."
     except Exception as exc:
         logger.error("open_signal failed: %s", exc)
         return False, str(exc)
@@ -1401,7 +1422,8 @@ def close_signal(
             cursor = conn.cursor()
             cursor.execute(
                 """
-                SELECT position_id, user_id, ticker, entry_timestamp, entry_price, quantity
+                SELECT position_id, user_id, ticker, entry_timestamp, entry_price, quantity,
+                       COALESCE(market, 'IN') AS market
                 FROM active_positions
                 WHERE position_id = ? AND user_id = ?
                 """,
@@ -1415,14 +1437,15 @@ def close_signal(
             quantity = int(pos["quantity"] or FIXED_QUANTITY)
             final_pnl = (float(exit_price) - entry_price) * quantity
             exit_ts = _now_iso()
+            currency = "₹" if pos["market"] == "IN" else "$"
 
             cursor.execute(
                 """
                 INSERT INTO closed_trades_history (
                     user_id, ticker, entry_timestamp, exit_timestamp,
                     entry_price, exit_price, quantity, final_pnl,
-                    exit_reason, exit_status
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    exit_reason, exit_status, market
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     user_id,
@@ -1435,13 +1458,14 @@ def close_signal(
                     final_pnl,
                     exit_status,
                     exit_status,
+                    pos["market"],
                 ),
             )
             cursor.execute(
                 "DELETE FROM active_positions WHERE position_id = ? AND user_id = ?",
                 (position_id, user_id),
             )
-        return True, f"Closed {pos['ticker']} — {exit_status}. Δ ₹{final_pnl:,.2f}.", final_pnl
+        return True, f"Closed {pos['ticker']} — {exit_status}. Δ {currency}{final_pnl:,.2f}.", final_pnl
     except Exception as exc:
         logger.error("close_signal failed: %s", exc)
         return False, str(exc), 0.0

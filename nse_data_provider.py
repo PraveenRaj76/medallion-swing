@@ -792,6 +792,22 @@ def build_live_row(
         "fundamentals_report": fund.get("fundamentals_report"),
         "ohlcv_ready": bool(ohlcv_ready),
     }
+    if ohlcv_ready:
+        row["week52_high"] = round(float(hist["high"].tail(252).max()), 2)
+        row["week52_low"] = round(float(hist["low"].tail(252).min()), 2)
+        row["day_open"] = round(float(hist["open"].iloc[-1]), 2)
+        row["day_high"] = round(float(hist["high"].iloc[-1]), 2)
+        row["day_low"] = round(float(hist["low"].iloc[-1]), 2)
+        row["day_volume"] = float(hist["volume"].iloc[-1]) if "volume" in hist.columns else None
+        row["prev_close"] = round(float(hist["close"].iloc[-2]), 2) if len(hist) >= 2 else None
+    else:
+        row["week52_high"] = None
+        row["week52_low"] = None
+        row["day_open"] = None
+        row["day_high"] = None
+        row["day_low"] = None
+        row["day_volume"] = None
+        row["prev_close"] = None
     for key in (
         "roic",
         "roe",

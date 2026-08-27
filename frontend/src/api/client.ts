@@ -77,10 +77,11 @@ export function getScreener(params: {
   return request<ScreenerResponse>(`/api/screener?${qs.toString()}`)
 }
 
-export function getProfile(ticker: string, live: boolean, userId?: number) {
+export function getProfile(ticker: string, live: boolean, userId?: number, market: 'IN' | 'US' = 'IN') {
   const qs = new URLSearchParams()
   if (live) qs.set('live', 'true')
   if (userId) qs.set('user_id', String(userId))
+  qs.set('market', market)
   return request<ProfileResponse>(`/api/profile/${encodeURIComponent(ticker)}?${qs.toString()}`)
 }
 
@@ -110,6 +111,8 @@ export function postOpenTrade(body: {
   entry_price: number
   stop_loss: number
   target: number
+  atr?: number
+  market?: 'IN' | 'US'
   user_id?: number
 }) {
   return request<{ status: string; message: string }>('/api/trade', {
