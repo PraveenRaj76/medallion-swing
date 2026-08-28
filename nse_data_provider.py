@@ -374,7 +374,18 @@ def _atr(frame: pd.DataFrame, period: int = 14) -> float:
         [(high - low).abs(), (high - prev_close).abs(), (low - prev_close).abs()],
         axis=1,
     ).max(axis=1)
-    atr = float(tr.rolling(period).mean().iloc[-1])
+    # Wilder's original smoothing (alpha=1/period, no rescaling) — this is
+    # what TradingView, Kite, thinkorswim etc. all use by default for ATR;
+    # a plain rolling mean of TR (the previous implementation here) is a
+    # legitimate variant some traders prefer but won't match the number a
+    # trader sees when cross-checking against any of those platforms.
+    # Seeding the EWM from bar 1 instead of Wilder's textbook "simple
+    # average of the first `period` bars, then smooth from there" only
+    # differs for roughly the first 30 bars — every caller here feeds a
+    # full year of history, so that gap has long since converged (see
+    # macroption.com/atr-calculation).
+    atr_series = tr.ewm(alpha=1.0 / period, adjust=False, min_periods=period).mean()
+    atr = float(atr_series.iloc[-1])
     if math.isnan(atr) or atr <= 0:
         atr = float(close.iloc[-1] * 0.02)
     return round(atr, 2)

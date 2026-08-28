@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { ApiError, getProfile, postCloseTrade, postOpenTrade } from '../api/client'
 import type { ActivePosition, ChecklistGroup, PricePoint, ProfileResponse } from '../types'
@@ -142,21 +142,21 @@ function BuyForm({
   currency,
   market,
   userId,
-  onDone,
 }: {
   profile: ProfileResponse
   currency: string
   market: 'in' | 'us'
   userId: number | null
-  onDone: () => void
 }) {
+  const navigate = useNavigate()
   const levels = profile.trade_levels
   const currentPrice = profile.quote.price ?? profile.close_price ?? 0
   const [entry, setEntry] = useState(currentPrice || 0)
   const [stop, setStop] = useState(levels?.stop_loss ?? Math.round((currentPrice || 0) * 0.95 * 100) / 100)
   const [target, setTarget] = useState(levels?.target ?? Math.round((currentPrice || 0) * 1.1 * 100) / 100)
   const [submitting, setSubmitting] = useState(false)
-  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null)
+  const [err, setErr] = useState<string | null>(null)
+  const [opened, setOpened] = useState<{ entry: number; stop: number; target: number } | null>(null)
 
   const risk = entry - stop
   const reward = target - entry
@@ -166,10 +166,10 @@ function BuyForm({
 
   async function submit() {
     setSubmitting(true)
-    setMsg(null)
+    setErr(null)
     try {
       const atr = num(profile.raw.atr_value)
-      const res = await postOpenTrade({
+      await postOpenTrade({
         ticker: profile.ticker,
         entry_price: entry,
         stop_loss: stop,
@@ -178,13 +178,41 @@ function BuyForm({
         market: market.toUpperCase() as 'IN' | 'US',
         user_id: userId ?? undefined,
       })
-      setMsg({ ok: true, text: String(res.message ?? 'Opened.') })
-      onDone()
-    } catch (err) {
-      setMsg({ ok: false, text: err instanceof ApiError ? err.message : 'Could not open trade.' })
+      // Deliberately not calling onDone() here — that re-fetches the whole
+      // profile and would swap this card straight to PositionCard mid-flight
+      // (the parent shows a full-page "Fetching…" state while that's in
+      // flight), which would hide the success banner before it's readable.
+      // The position is already open in the backend; the page just stays on
+      // this confirmation until the user navigates via the CTA below, or
+      // searches again (which naturally picks up the new position).
+      setOpened({ entry, stop, target })
+    } catch (e) {
+      setErr(e instanceof ApiError ? e.message : 'Could not open trade.')
     } finally {
       setSubmitting(false)
     }
+  }
+
+  if (opened) {
+    return (
+      <div className="card trade-card">
+        <div className="trade-success-banner">
+          <div className="trade-success-icon">✓</div>
+          <div className="trade-success-body">
+            <div className="trade-success-title">Trade opened — {profile.ticker} is now tracked</div>
+            <div className="trade-success-detail">
+              Entry {currency}
+              {opened.entry.toFixed(2)} · Stop {currency}
+              {opened.stop.toFixed(2)} · Target {currency}
+              {opened.target.toFixed(2)}
+            </div>
+          </div>
+          <button className="trade-success-cta" onClick={() => navigate('/forward-test')}>
+            View in Forward-Test →
+          </button>
+        </div>
+      </div>
+    )
   }
 
   return (
@@ -229,7 +257,7 @@ function BuyForm({
       <button className="action-btn buy" disabled={submitting || !entry || !stop || !target} onClick={submit}>
         {submitting ? 'Opening…' : `Buy — Track 1 Share @ ${currency}${entry.toFixed(2)}`}
       </button>
-      {msg && <div className={`trade-msg ${msg.ok ? 'ok' : 'err'}`}>{msg.text}</div>}
+      {err && <div className="trade-err-banner">{err}</div>}
       {levels && (
         <p className="footnote">
           Suggested from 2.5×ATR stop / 6×ATR target (ATR {currency}
@@ -245,24 +273,24 @@ function PositionCard({
   profile,
   currency,
   userId,
-  onDone,
 }: {
   profile: ProfileResponse
   currency: string
   userId: number | null
-  onDone: () => void
 }) {
+  const navigate = useNavigate()
   const pos = profile.active_position as ActivePosition
   const livePrice = profile.quote.price ?? pos.current_price ?? pos.entry_price
   const liveUpnl = (livePrice - pos.entry_price) * pos.quantity
   const [exitPrice, setExitPrice] = useState(livePrice)
   const [exitStatus, setExitStatus] = useState('MANUAL EXIT')
   const [submitting, setSubmitting] = useState(false)
-  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null)
+  const [err, setErr] = useState<string | null>(null)
+  const [closed, setClosed] = useState<{ pnl: number } | null>(null)
 
   async function submit() {
     setSubmitting(true)
-    setMsg(null)
+    setErr(null)
     try {
       const res = await postCloseTrade({
         position_id: pos.position_id,
@@ -270,13 +298,36 @@ function PositionCard({
         exit_status: exitStatus,
         user_id: userId ?? undefined,
       })
-      setMsg({ ok: true, text: `${res.message} Final P&L ${currency}${res.final_pnl.toFixed(2)}.` })
-      onDone()
-    } catch (err) {
-      setMsg({ ok: false, text: err instanceof ApiError ? err.message : 'Could not close trade.' })
+      // Same reasoning as BuyForm: no onDone() here, or the success banner
+      // gets replaced mid-flight by the parent's full-page refetch/loading
+      // state before it's readable.
+      setClosed({ pnl: res.final_pnl })
+    } catch (e) {
+      setErr(e instanceof ApiError ? e.message : 'Could not close trade.')
     } finally {
       setSubmitting(false)
     }
+  }
+
+  if (closed) {
+    return (
+      <div className="card trade-card">
+        <div className={`trade-success-banner ${closed.pnl < 0 ? 'loss' : ''}`}>
+          <div className="trade-success-icon">✓</div>
+          <div className="trade-success-body">
+            <div className="trade-success-title">Position closed — {profile.ticker}</div>
+            <div className="trade-success-detail">
+              Final P&amp;L {closed.pnl >= 0 ? '+' : ''}
+              {currency}
+              {closed.pnl.toFixed(2)}
+            </div>
+          </div>
+          <button className="trade-success-cta" onClick={() => navigate('/forward-test')}>
+            View in Forward-Test →
+          </button>
+        </div>
+      </div>
+    )
   }
 
   return (
@@ -340,7 +391,7 @@ function PositionCard({
       <button className="action-btn sell" disabled={submitting} onClick={submit}>
         {submitting ? 'Closing…' : 'Close Position'}
       </button>
-      {msg && <div className={`trade-msg ${msg.ok ? 'ok' : 'err'}`}>{msg.text}</div>}
+      {err && <div className="trade-err-banner">{err}</div>}
     </div>
   )
 }
@@ -615,17 +666,9 @@ export function SearchProfile() {
                 profile={profile}
                 currency={currency}
                 userId={userId}
-                onDone={() => runSearch(profile.ticker, market)}
               />
             ) : (
-              <BuyForm
-                key={profile.ticker}
-                profile={profile}
-                currency={currency}
-                market={market}
-                userId={userId}
-                onDone={() => runSearch(profile.ticker, market)}
-              />
+              <BuyForm key={profile.ticker} profile={profile} currency={currency} market={market} userId={userId} />
             )}
           </div>
 
