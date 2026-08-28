@@ -388,6 +388,14 @@ h1 {
   gap: 14px;
   margin: 32px 0;
 }
+.kpi-row.cols-5 {
+  grid-template-columns: repeat(5, 1fr);
+}
+@media (max-width: 1100px) {
+  .kpi-row.cols-5 {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
 .kpi {
   background: var(--surface);
   backdrop-filter: blur(20px);

@@ -214,6 +214,7 @@ export interface ForwardTestTrade {
 
 export interface ForwardTestResponse {
   user_id: number
+  market: 'IN' | 'US'
   total_signals_tracked: number
   successful_trades: number
   bad_trades: number

@@ -251,6 +251,7 @@ def validate_active_signals(user_id: int) -> List[Dict[str, Any]]:
                 continue
             position_id = int(pos["position_id"])
             ticker = str(pos["ticker"]).upper()
+            pos_market = str(pos.get("market") or "IN").upper()
             entry_price = float(pos["entry_price"])
             target = float(pos["target"])
             quantity = int(pos.get("quantity") or FIXED_QUANTITY)
@@ -259,9 +260,23 @@ def validate_active_signals(user_id: int) -> List[Dict[str, Any]]:
             trail_phase = str(pos.get("trail_phase") or "initial")
             atr_at_entry = pos.get("atr_at_entry")
 
-            market = db.get_ticker_row(ticker)
+            market = db.get_ticker_row(ticker, market=pos_market)
             if market is None and nse.is_live_mode():
-                market = ensure_ticker_live(ticker, include_fundamentals=False)
+                # Cached row missing (ticker aged out of the leaderboard, or
+                # never refreshed) — resolve live through the SAME provider
+                # the position's own market uses. Using the India-only path
+                # for a US ticker (or vice versa) would either find nothing
+                # or, worse, misresolve a coincidentally-matching symbol.
+                if pos_market == "US":
+                    import us_data_provider as usdp
+
+                    try:
+                        market = usdp.build_live_row(ticker)
+                    except Exception as exc:
+                        logger.warning("US live resolve failed for %s: %s", ticker, exc)
+                        market = None
+                else:
+                    market = ensure_ticker_live(ticker, include_fundamentals=False)
 
             if market is not None:
                 current_price = float(market.get("close_price", entry_price))

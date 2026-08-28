@@ -20,16 +20,17 @@ router = APIRouter()
 
 
 @router.get("/forward-test")
-def get_forward_test(user_id: Optional[int] = Query(None)):
-    # India-only for now — this page doesn't yet have a US tab (see Part 5),
-    # so a US signal opened from Search Profile must not silently blend into
-    # these India-labeled stats. Positions/trades themselves are already
-    # market-tagged; this filter just keeps this specific response scoped.
+def get_forward_test(
+    user_id: Optional[int] = Query(None),
+    market: str = Query("IN", pattern="^(?i)(IN|US)$"),
+):
     uid = default_user_id(user_id)
-    scorecard = pipeline.compute_forward_test_scorecard(uid, market="IN")
-    active = db.get_active_positions(uid, market="IN")
+    market = market.upper()
+    scorecard = pipeline.compute_forward_test_scorecard(uid, market=market)
+    active = db.get_active_positions(uid, market=market)
     return {
         "user_id": uid,
+        "market": market,
         **scorecard,
         "active_positions": frame_to_records(active),
     }

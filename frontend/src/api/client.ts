@@ -89,8 +89,8 @@ export function getSectors(market: 'IN' | 'US' = 'IN') {
   return request<SectorsResponse>(`/api/sectors?market=${market}`)
 }
 
-export function getForwardTest(userId: number) {
-  return request<ForwardTestResponse>(`/api/forward-test?user_id=${userId}`)
+export function getForwardTest(userId: number, market: 'IN' | 'US' = 'IN') {
+  return request<ForwardTestResponse>(`/api/forward-test?user_id=${userId}&market=${market}`)
 }
 
 export function postRefresh(body: {
