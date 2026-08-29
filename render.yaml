@@ -1,16 +1,37 @@
 services:
   - type: web
-    name: medallion-swing
+    name: medallion-swing-api
     runtime: python
     plan: free
     buildCommand: pip install -r requirements.txt
-    startCommand: streamlit run app.py --server.port=$PORT --server.address=0.0.0.0 --server.headless=true --browser.gatherUsageStats=false
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
     envVars:
       - key: PYTHON_VERSION
         value: "3.11.9"
-      - key: MEDALLION_DB_PATH
-        value: /opt/render/project/src/medallion_system.db
       - key: MEDALLION_MARKET_MODE
         value: live
       - key: MEDALLION_SSL_VERIFY
         value: "1"
+      - key: MEDALLION_DEFAULT_USER_ID
+        value: "1"
+      # Set these in the Render dashboard (Environment tab) — never commit
+      # real values. Free web services have no persistent disk, so
+      # TURSO_DATABASE_URL/TURSO_AUTH_TOKEN are required, not optional,
+      # or the database resets every time this service sleeps and wakes.
+      - key: TURSO_DATABASE_URL
+        sync: false
+      - key: TURSO_AUTH_TOKEN
+        sync: false
+      - key: ANGEL_API_KEY
+        sync: false
+      - key: ANGEL_CLIENT_ID
+        sync: false
+      - key: ANGEL_PASSWORD
+        sync: false
+      - key: ANGEL_TOTP_SECRET
+        sync: false
+      # Comma-separated list of extra allowed CORS origins — set this to
+      # your Cloudflare Pages URL (e.g. https://medallion-swing.pages.dev)
+      # once you know it.
+      - key: MEDALLION_ALLOWED_ORIGINS
+        sync: false

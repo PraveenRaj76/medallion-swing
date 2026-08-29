@@ -13,8 +13,15 @@ class ApiError extends Error {
   }
 }
 
+// In dev, Vite's own proxy (vite.config.ts) forwards /api to localhost:8000,
+// so a relative path works and this stays empty. In production the frontend
+// (Cloudflare Pages) and backend (Render) are on different domains with no
+// proxy between them — VITE_API_BASE_URL, set at build time, points requests
+// at the real backend URL instead of 404ing against the static host.
+const API_BASE = (import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/$/, '')
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(path, {
+  const res = await fetch(`${API_BASE}${path}`, {
     ...init,
     headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) },
   })
