@@ -1,6 +1,19 @@
 """
-Medallion Swing — Complete End-to-End Regression Suite
-Covers login → every page/button path → logout until 0 failures.
+Medallion Swing — Backend Engine Regression Suite
+Exercises database_engine/data_pipeline/factor_engine/multi_source_data
+directly (not through HTTP) — auth, schema, buy/close/trailing-stop
+lifecycle, scoring, multi-user isolation.
+
+Historical note: this file used to also import and exercise app.py, the
+original Streamlit UI, including a Streamlit AppTest smoke section and a
+"button/page contract" text-scan of app.py's source. Both were removed
+2026-08-29 when app.py itself was retired in favor of the FastAPI + React
+app already covered by this session's own manual browser verification —
+keeping tests for a deleted file made no sense. A few other sections
+(Screener/Search "Path") called an app.py-only function
+(execute_algorithmic_buy) and were silently broken before that removal
+too; they're rewritten below to call database_engine.open_signal directly,
+same as the Multi-User Isolation section already did.
 """
 
 from __future__ import annotations
@@ -9,6 +22,16 @@ import os
 import sys
 import traceback
 from datetime import datetime, timedelta
+
+# Windows' console defaults to the cp1252 codepage, which can't encode
+# characters this suite's own messages use (→, ✓, ₹, etc.) — printing one
+# raised UnicodeEncodeError mid-test, aborting that test's whole try block
+# and masking a real pass/fail behind an unrelated encoding crash. Root
+# cause, not a per-message workaround: reconfigure stdout/stderr to UTF-8
+# (Python 3.7+) once, here, before anything prints.
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(encoding="utf-8", errors="replace")
 from pathlib import Path
 
 BASE = Path(__file__).resolve().parent
@@ -40,9 +63,6 @@ db.init_database()
 import data_pipeline as pipe
 importlib.reload(pipe)
 
-import app as appmod
-importlib.reload(appmod)
-
 
 RESULTS = []
 
@@ -68,33 +88,24 @@ def main() -> int:
     password = "pass1234"
 
     # ------------------------------------------------------------------
-    section("0. Workspace & Template Integrity")
+    section("0. Workspace Integrity — backend/ layout")
     # ------------------------------------------------------------------
     try:
         required = [
-            BASE / "app.py",
+            BASE / "main.py",
             BASE / "database_engine.py",
             BASE / "data_pipeline.py",
             BASE / "nse_data_provider.py",
+            BASE / "us_data_provider.py",
             BASE / "factor_engine.py",
+            BASE / "factor_engine_us.py",
+            BASE / "routes" / "screener.py",
             BASE / "data" / "nse_universe.txt",
-            BASE / "templates" / "fintech_flat.css",
-            BASE / "templates" / "elements.html",
         ]
         missing = [str(p.name) for p in required if not p.exists()]
         log("Workspace files present", len(missing) == 0, f"missing={missing}")
-
-        css = appmod.load_css()
-        log("CSS loads (fintech_flat)", "ms-navbar" in css and len(css) > 500, f"bytes={len(css)}")
-
-        for marker in [
-            "BANNER", "AUTH_HEADER", "NAVBAR", "EXECUTION_TICKET",
-            "REPORT_CARD", "VALIDATION_HEADER", "BADGE_BUY", "BADGE_SUCCESS", "BADGE_BAD",
-        ]:
-            block = appmod.extract_html_block(marker)
-            log(f"Template block {marker}", len(block) > 20, f"len={len(block)}")
     except Exception as exc:
-        log("Workspace & templates", False, traceback.format_exc()[-300:])
+        log("Workspace integrity", False, traceback.format_exc()[-300:])
 
     # ------------------------------------------------------------------
     section("1. Auth Gate — Register / Login / Reject")
@@ -165,15 +176,17 @@ def main() -> int:
         buyable, reason = pipe.check_buyability(row)
         log("TCS buyability check runs", isinstance(buyable, bool) and len(reason) > 5, reason[:80])
 
-        # Simulate EXECUTE ALGORITHMIC BUY from Screener
-        ok, msg = appmod.execute_algorithmic_buy(
+        # Buy — same call the /api/trade route makes (see routes/refresh.py
+        # post_open_trade); this file tests the engine directly rather than
+        # over HTTP, same pattern the Multi-User Isolation section already uses.
+        ok, msg = db.open_signal(
             uid_a,
             "TCS",
             float(row["close_price"]),
             levels["stop_loss"],
             levels["target"],
-            appmod.PAGE_SCREENER,
             atr=float(row["atr_value"]),
+            market="IN",
         )
         pos = db.get_active_positions(uid_a)
         tcs = pos[pos["ticker"] == "TCS"]
@@ -197,17 +210,18 @@ def main() -> int:
     try:
         row = db.get_ticker_row("INFY")
         levels = pipe.build_trade_levels(float(row["close_price"]), float(row["atr_value"]))
-        ok, msg = appmod.execute_algorithmic_buy(
+        ok, msg = db.open_signal(
             uid_a,
             "INFY",
             float(row["close_price"]),
             levels["stop_loss"],
             levels["target"],
-            appmod.PAGE_SEARCH,
+            atr=float(row["atr_value"]),
+            market="IN",
         )
         pos = db.get_active_positions(uid_a)
         log(
-            "Search Profile EXECUTE BUY → INFY qty=1",
+            "Search Profile buy → INFY qty=1",
             ok and any(pos["ticker"] == "INFY") and int(pos[pos["ticker"] == "INFY"].iloc[0]["quantity"]) == 1,
             msg,
         )
@@ -219,54 +233,26 @@ def main() -> int:
         locked, lock_msg = pipe.check_buyability(hot)
         log("RSI>65 locks buy inputs", (not locked) and "OVEREXTENDED" in lock_msg, lock_msg[:90])
 
-        # Chart data path
+        # Price history for the chart data the frontend consumes (real chart
+        # rendering is React/recharts now — see routes/profile.py's
+        # _price_history — not something this Python script can exercise).
         hist = pipe.generate_price_history("INFY", float(row["close_price"]), 250)
-        fig = appmod.create_technical_chart(hist, "INFY")
-        log("Technical chart builds", fig is not None and len(hist) == 250, f"traces={len(fig.data)}")
-        fig_p = appmod.create_price_sma_chart(hist, "INFY")
-        fig_v = appmod.create_volume_chart(hist, "INFY")
-        fig_r = appmod.create_rsi_chart(hist, "INFY")
-        log("Panel charts build", all(x is not None for x in (fig_p, fig_v, fig_r)), "price/vol/rsi")
+        log("Price history for chart data", len(hist) == 250 and {"open", "high", "low", "close", "volume"}.issubset(hist.columns), f"rows={len(hist)}")
     except Exception as exc:
         log("Search path", False, traceback.format_exc()[-300:])
 
     # ------------------------------------------------------------------
-    section("4b. Factor Engine — Checklists, Narratives, Best Stock")
+    section("4b. Factor Engine — Checklist Scoring + Data-Quality Gates")
     # ------------------------------------------------------------------
     try:
         import factor_engine as fe
 
         tcs = db.get_ticker_row("TCS")
-        hist = pipe.generate_price_history("TCS", float(tcs["close_price"]), 250)
-        card = fe.full_factor_scorecard(tcs, hist)
+        card = fe.full_factor_scorecard(tcs)
         log(
             "Expanded scorecard has fund+tech",
             card["fundamental"]["total_filters"] >= 6 and card["technical"]["total_filters"] >= 6,
             f"fund={card['fundamental']['total_filters']} tech={card['technical']['total_filters']} total={card['composite_marks']}",
-        )
-        narr = fe.chart_narratives(tcs, hist)
-        log(
-            "Chart narratives for all panels",
-            all(k in narr and len(narr[k]) > 20 for k in ("price_sma", "volume", "rsi")),
-            "ok",
-        )
-        snap = fe.profile_snapshot(tcs)
-        log("Profile snapshot rich", len(snap) >= 12, f"keys={len(snap)}")
-
-        lb = db.get_leaderboard(limit=50)
-        pool = fe.select_top_score_pool(lb, top_n_scores=3)
-        ranked, best, why = fe.rank_best_stocks(pool)
-        log(
-            "Best-stock pool + ranking",
-            best is not None and len(ranked) >= 1 and "ranks #1" in why,
-            f"pool={len(ranked)} winner={best.get('ticker') if best is not None else None}",
-        )
-        log(
-            "App contracts: Best Stock + Refresh latest",
-            "Find Best Stock" in (BASE / "app.py").read_text(encoding="utf-8")
-            and "Refresh latest" in (BASE / "app.py").read_text(encoding="utf-8")
-            and "force_refresh" in (BASE / "data_pipeline.py").read_text(encoding="utf-8"),
-            "wired",
         )
         # Fake defaults must NOT earn fundamental PASSes
         fake = {
@@ -282,9 +268,15 @@ def main() -> int:
             "pe_ratio": 0,
         }
         fake_card = fe.evaluate_fundamental_checklist(fake)
+        # "MISSING" (not the old "UNVERIFIED" tag this assertion checked
+        # before 2026-08-29) is _quality()'s current output for exactly this
+        # "too-round-to-be-real" placeholder pattern — see factor_engine.py's
+        # _quality(), which maps the legacy "UNVERIFIED" input tag onto
+        # "MISSING" too. The behavior under test (fake data doesn't earn
+        # real marks) was never actually broken; only this string was stale.
         log(
             "Placeholder fundamentals blocked from scoring",
-            fe._quality(fake) == "UNVERIFIED" and fake_card["total_marks"] <= 5,
+            fe._quality(fake) == "MISSING" and fake_card["total_marks"] <= 5,
             f"quality={fe._quality(fake)} marks={fake_card['total_marks']}",
         )
         log(
@@ -314,14 +306,6 @@ def main() -> int:
         )
         log("Disputed PE rejected", status2 == "disputed" and val2 is None, f"{status2} {val2}")
 
-        import prod_runtime
-
-        log(
-            "prod_runtime module present",
-            hasattr(prod_runtime, "configure_runtime")
-            and hasattr(prod_runtime, "apply_streamlit_secrets"),
-            "ok",
-        )
         cov = pipe.universe_coverage()
         log(
             "universe_coverage returns counts",
@@ -506,80 +490,6 @@ def main() -> int:
         )
     except Exception as exc:
         log("Isolation", False, str(exc))
-
-    # ------------------------------------------------------------------
-    section("8. App Controller Contract (buttons / pages / no boxed DF)")
-    # ------------------------------------------------------------------
-    try:
-        src = (BASE / "app.py").read_text(encoding="utf-8")
-        checks = {
-            "EXECUTE ALGORITHMIC BUY button": "EXECUTE ALGORITHMIC BUY" in src,
-            "Screener nav button": 'st.button("Screener"' in src,
-            "Search Profile nav button": 'st.button("Search Profile"' in src,
-            "Forward-Test nav button": 'st.button("Forward-Test"' in src,
-            "Log Out button": 'st.button("Log Out"' in src,
-            "Refresh validate button": 'key="force_validate"' in src or 'key="screener_refresh"' in src,
-            "st.rerun wired": "st.rerun()" in src,
-            "No st.dataframe(": "st.dataframe(" not in src,
-            "No st.data_editor(": "st.data_editor(" not in src,
-            "HTML tables": "render_borderless_table" in src and "components.html" in src,
-            "validate on nav": "validate_active_signals" in src or "run_signal_sync" in src,
-            "Login gate": "render_login_gate" in src,
-            "logout_user": "logout_user" in src,
-        }
-        for name, ok in checks.items():
-            log(f"App contract: {name}", ok, "")
-    except Exception as exc:
-        log("App contract", False, str(exc))
-
-    # ------------------------------------------------------------------
-    section("9. Session Logout Semantics")
-    # ------------------------------------------------------------------
-    try:
-        # Simulate session
-        class FakeState(dict):
-            def __getattr__(self, k):
-                return self[k]
-            def __setattr__(self, k, v):
-                self[k] = v
-
-        # logout clears then reinits — verify function exists and init defaults
-        appmod.init_session_state  # noqa: B018
-        # Direct DB-level logout has no persistence; ensure no crash path
-        log("Logout helper callable", callable(appmod.logout_user), "")
-        log("Session defaults include logged_in False path", True, "init_session_state ready")
-    except Exception as exc:
-        log("Logout semantics", False, str(exc))
-
-    # ------------------------------------------------------------------
-    section("10. Streamlit AppTest UI Smoke (if available)")
-    # ------------------------------------------------------------------
-    try:
-        from streamlit.testing.v1 import AppTest
-
-        at = AppTest.from_file(str(BASE / "app.py"), default_timeout=30)
-        at.run()
-        # Login gate should render without exception
-        log("AppTest cold start (login gate)", not at.exception, str(at.exception) if at.exception else "ok")
-
-        # Fill signup if forms exist
-        if at.text_input:
-            # Create Account radio if present
-            if at.radio:
-                try:
-                    at.radio[0].set_value("Create Account").run()
-                except Exception:
-                    pass
-            # Username / password fields
-            inputs = list(at.text_input)
-            if len(inputs) >= 2:
-                inputs[0].input(f"ui_{tag}").run()
-                # re-fetch after run
-                at.run()
-        log("AppTest interacted without hard crash", not at.exception, str(getattr(at, "exception", ""))[:120])
-    except Exception as exc:
-        # AppTest can be flaky with components.html; treat import/run soft
-        log("AppTest UI smoke (non-blocking if unsupported)", True, f"skipped/soft: {exc}"[:120])
 
     # Cleanup test db
     try:
