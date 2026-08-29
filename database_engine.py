@@ -43,23 +43,46 @@ TURSO_TOKEN = os.environ.get("TURSO_AUTH_TOKEN", "").strip()
 USE_TURSO = bool(TURSO_URL and TURSO_TOKEN)
 
 
-class _RowShim(dict):
-    """Mimics sqlite3.Row: supports row['col'] AND row[0] on the same object."""
+class _RowShim:
+    """Mimics sqlite3.Row exactly — NOT a dict subclass. Real sqlite3.Row
+    supports row['col'] and row[0], dict(row) via the keys()+__getitem__
+    mapping protocol, but iterating a row (`for v in row`, or anything that
+    does `tuple(row)`/`list(row)` — including pandas' generic DBAPI2
+    read_sql_query path) yields VALUES in column order, not keys. A plain
+    dict subclass gets this backwards (dict iterates its own keys), which
+    silently corrupts every pd.read_sql_query result against this shim:
+    verified by testing — rows came back as column-name strings instead of
+    the actual data. See sqlite3.Row's real behavior for the contract this
+    must match."""
 
     def __init__(self, columns: List[str], values: Tuple[Any, ...]):
-        super().__init__(zip(columns, values))
+        self._columns = columns
         self._values = list(values)
 
     def __getitem__(self, key):
         if isinstance(key, int):
             return self._values[key]
-        return super().__getitem__(key)
+        return self._values[self._columns.index(key)]
+
+    def __iter__(self):
+        return iter(self._values)
+
+    def __len__(self):
+        return len(self._values)
+
+    def keys(self):
+        return list(self._columns)
 
 
 class _TursoCursor:
     """Re-implements the slice of the sqlite3 cursor API this file actually
-    uses (.execute/.fetchone/.fetchall/.rowcount/.lastrowid) on top of the
-    Turso/libSQL client, so every existing query in this file works unchanged."""
+    uses (.execute/.fetchone/.fetchall/.rowcount/.lastrowid/.description/
+    .close) on top of the Turso/libSQL client, so every existing query in
+    this file works unchanged. .description and .close were added after
+    finding pd.read_sql_query (6 call sites in this file) requires both —
+    pandas only special-cases real sqlite3.Connection; anything else goes
+    through its generic DBAPI2 path, which calls cursor.description to get
+    column names and cursor.close() when done."""
 
     def __init__(self, client):
         self._client = client
@@ -67,14 +90,19 @@ class _TursoCursor:
         self._idx = 0
         self.rowcount = -1
         self.lastrowid = None
+        self.description: Optional[List[Tuple[Any, ...]]] = None
 
     def execute(self, sql: str, params: Optional[Any] = None):
         args = list(params) if params else []
         rs = self._client.execute(sql, args)
-        self._rows = [_RowShim(list(rs.columns), tuple(r)) for r in rs.rows]
+        columns = list(rs.columns)
+        self._rows = [_RowShim(columns, tuple(r)) for r in rs.rows]
         self._idx = 0
         self.rowcount = getattr(rs, "rows_affected", -1)
         self.lastrowid = getattr(rs, "last_insert_rowid", None)
+        # DBAPI2 description is a 7-tuple per column; only name (index 0) is
+        # meaningful here — the rest describe types Turso doesn't expose.
+        self.description = [(c, None, None, None, None, None, None) for c in columns]
         return self
 
     def fetchone(self):
@@ -88,6 +116,9 @@ class _TursoCursor:
         rows = self._rows[self._idx:]
         self._idx = len(self._rows)
         return rows
+
+    def close(self):
+        pass
 
 
 class _TursoConnection:

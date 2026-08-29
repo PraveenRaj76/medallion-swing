@@ -28,11 +28,19 @@ app = FastAPI(
     version="2.0.0",
 )
 
+# Extra production origins (e.g. the Cloudflare Pages deployment URL) come
+# from an env var, comma-separated — the dev-server defaults below always
+# stay allowed so local development never needs this set.
+_extra_origins = [
+    o.strip() for o in os.environ.get("MEDALLION_ALLOWED_ORIGINS", "").split(",") if o.strip()
+]
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:5173",  # Vite dev server
         "http://localhost:3000",
+        *_extra_origins,
     ],
     allow_credentials=True,
     allow_methods=["*"],
