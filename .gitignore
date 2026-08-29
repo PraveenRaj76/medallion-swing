@@ -2,7 +2,6 @@ medallion_system.db
 *.pyc
 __pycache__/
 .env
-.streamlit/secrets.toml
 .DS_Store
 *.db
 *.sqlite
@@ -14,3 +13,6 @@ env/
 dist/
 build/
 node_modules/
+*.log
+*_log.txt
+*_stdout.txt
