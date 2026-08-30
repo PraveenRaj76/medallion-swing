@@ -118,6 +118,13 @@ export const TECHNICAL_EXPLAINERS: ExplainerItem[] = [
     scoring: '≥10% → 8/8 (strong) · 0–10% → 5/8 (mild outperform) · -8% to 0% → 2/8 (mild underperform) · below -8% → 0/8 (severe weakness).',
   },
   {
+    name: '52-Week Range Position',
+    maxMarks: 6,
+    what: "Where the current price sits between its own 52-week low and high — specifically, is it at least 30% above the low AND within 25% of the high. Borrowed directly from Mark Minervini's Trend Template (conditions 6-7 of 8).",
+    why: "A stock can be above its 200/50-day averages and still be limping along near its yearly low — moving averages alone don't catch that. A name still hugging its 52-week low isn't a confirmed uptrend no matter what the shorter averages say.",
+    scoring: 'Both conditions met → 6/6 (stage-2 position) · one of the two → 3/6 (partial) · neither → 0/6 (too close to its low). Shown as N/A when 52-week high/low isn\'t available for this row yet.',
+  },
+  {
     name: 'Delivery %',
     maxMarks: 5,
     what: "What share of the day's traded volume was actually delivered (taken into demat) rather than squared off intraday — real data from NSE's own daily bhavcopy archive, not a proxy or estimate.",

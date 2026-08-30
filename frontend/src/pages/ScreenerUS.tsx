@@ -155,7 +155,7 @@ export function ScreenerUS() {
           />
           <ChecklistExplainer
             title="Understand the Technical Checklist"
-            subtitle="What each of the 8 trend & timing filters means, and why it's scored the way it is"
+            subtitle="What each of the 9 trend & timing filters means, and why it's scored the way it is"
             items={US_TECHNICAL_EXPLAINERS}
           />
 

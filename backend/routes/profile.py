@@ -179,7 +179,7 @@ def get_profile(
 
         scorecard = factors.full_factor_scorecard(row)
 
-    buy_signal = pipeline.evaluate_buy_signal(row, scorecard, uid)
+    buy_signal = pipeline.evaluate_buy_signal(row, scorecard, uid, market=market)
 
     atr = row.get("atr_value")
     close_price = row.get("close_price")

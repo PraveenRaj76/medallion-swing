@@ -323,6 +323,28 @@ def _fetch_ohlcv_yfinance(ticker: str, range_param: str = "1y", interval: str = 
     return pd.DataFrame()
 
 
+def _clean_ohlcv(frame: pd.DataFrame) -> pd.DataFrame:
+    """Drop any bar whose close is NaN — a real, observed live-data quirk:
+    the most recent session's row sometimes comes back from Yahoo with a
+    Date but a NaN close (not yet settled/backfilled at fetch time), even
+    though open/high/low/volume for the same row are often present. A NaN
+    close silently poisons every close-derived calculation downstream:
+    close_price = closes.iloc[-1] became flat-out NaN, RSI's diff() series
+    got poisoned around it, ATR's fallback re-reads close.iloc[-1] too —
+    while sma_50/sma_200 looked completely fine, because pandas' .mean()
+    silently skips NaN by default. That divergence (SMAs fine, everything
+    else quietly broken) is what made this look like an intermittent,
+    unreproducible bug the first time it was chased (a transient 500 on
+    /api/profile/AAPL?live=true) — it's not transient, it's this. Fixed
+    once here so every caller (technicals, week52 hi/lo, the benchmark/
+    market-regime fetch) sees a clean frame instead of patching each
+    consumer's NaN guard individually.
+    """
+    if frame is None or frame.empty or "close" not in frame.columns:
+        return frame
+    return frame[frame["close"].notna()]
+
+
 def fetch_ohlcv(ticker: str, range_param: str = "1y", interval: str = "1d") -> pd.DataFrame:
     """Fetch NSE daily bars: Yahoo chart HTTP → yfinance → empty (caller may multi-source CMP)."""
     hosts = (
@@ -341,13 +363,17 @@ def fetch_ohlcv(ticker: str, range_param: str = "1y", interval: str = "1d") -> p
             try:
                 frame = _parse_chart_payload(resp.json())
                 if not frame.empty:
-                    return frame
+                    frame = _clean_ohlcv(frame)
+                    if not frame.empty:
+                        return frame
             except Exception as exc:
                 logger.error("parse ohlcv failed for %s: %s", symbol, exc)
 
     yf_frame = _fetch_ohlcv_yfinance(ticker, range_param=range_param, interval=interval)
     if not yf_frame.empty:
-        return yf_frame
+        yf_frame = _clean_ohlcv(yf_frame)
+        if not yf_frame.empty:
+            return yf_frame
     return pd.DataFrame()
 
 
@@ -444,6 +470,8 @@ def compute_technicals(
         "atr_value": atr_value,
         "alpha_3m": alpha_3m,
         "delivery_pct_10d": delivery_pct,
+        "week52_high": round(float(frame["high"].tail(252).max()), 2),
+        "week52_low": round(float(frame["low"].tail(252).min()), 2),
     }
 
 
