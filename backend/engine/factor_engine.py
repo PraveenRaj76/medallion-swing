@@ -24,7 +24,7 @@ RSI_OVERBOUGHT = 65.0
 def _f(row: Any, key: str, default: float = 0.0) -> float:
     try:
         val = row.get(key, default) if hasattr(row, "get") else default
-        if val is None or (isinstance(val, float) and np.isnan(val)):
+        if val is None or (isinstance(val, float) and not np.isfinite(val)):
             return float(default)
         return float(val)
     except Exception:
@@ -36,7 +36,7 @@ def _optional(row: Any, key: str) -> Optional[float]:
         if not hasattr(row, "get"):
             return None
         val = row.get(key)
-        if val is None or val == "" or (isinstance(val, float) and np.isnan(val)):
+        if val is None or val == "" or (isinstance(val, float) and not np.isfinite(val)):
             return None
         return float(val)
     except Exception:

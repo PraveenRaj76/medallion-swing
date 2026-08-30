@@ -1571,7 +1571,20 @@ def evaluate_buy_signal(row: Dict[str, Any], scorecard: Dict[str, Any], user_id:
     }
 
 
-def build_trade_levels(close_price: float, atr: float) -> Dict[str, float]:
+def _invalid_trade_levels() -> Dict[str, Any]:
+    return {
+        "stop_loss": None,
+        "target": None,
+        "risk": None,
+        "reward": None,
+        "rrr": None,
+        "quantity": 0,
+        "recommended_quantity_at_1pct_risk": 0,
+        "valid": False,
+    }
+
+
+def build_trade_levels(close_price: float, atr: float) -> Dict[str, Any]:
     """Initial stop/target only — see compute_trailing_stop() for what
     actually manages the position after entry. 2.5x ATR sits at the upper
     edge of the well-documented 1.5-2.5x swing-trade band (Turtle system
@@ -1579,8 +1592,30 @@ def build_trade_levels(close_price: float, atr: float) -> Dict[str, float]:
     a forced exit (see validate_active_signals) — it's the level that flips
     the trailing stop from its wider 3x-ATR "initial" band to a tighter
     2x-ATR "runner" band, so a genuine trend isn't capped at a fixed R:R.
+
+    Returns valid=False (all levels None) rather than a nonsensical result
+    when the inputs can't support a real trade: non-finite close/ATR (a
+    stress test caught NaN ATR silently producing a NaN "stop_loss" that
+    looks like a real number until it hits JSON serialization), or a
+    close price low enough / ATR wide enough that a 2.5x-ATR stop would
+    sit at or below zero — not a sellable price. Callers should treat
+    valid=False the same as "no trade levels available", matching how
+    routes/profile.py already treats a missing/zero ATR.
     """
+    if not (
+        isinstance(close_price, (int, float))
+        and isinstance(atr, (int, float))
+        and math.isfinite(close_price)
+        and math.isfinite(atr)
+        and close_price > 0
+        and atr > 0
+    ):
+        return _invalid_trade_levels()
+
     stop_loss = close_price - (2.5 * atr)
+    if stop_loss <= 0:
+        return _invalid_trade_levels()
+
     target = close_price + (6.0 * atr)
     risk = close_price - stop_loss
     reward = target - close_price
@@ -1596,6 +1631,7 @@ def build_trade_levels(close_price: float, atr: float) -> Dict[str, float]:
         "rrr": round(rrr, 2),
         "quantity": FIXED_QUANTITY,
         "recommended_quantity_at_1pct_risk": recommended_quantity,
+        "valid": True,
     }
 
 
