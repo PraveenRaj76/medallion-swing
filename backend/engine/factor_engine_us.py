@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
-from engine.factor_engine import CONFIDENCE_MULTIPLIER, _f, _item, _optional, _quality
+from engine.factor_engine import CONFIDENCE_MULTIPLIER, _f, _item, _optional, _quality, _week52_range_item
 
 
 def _is_financial_us(row: Any) -> bool:
@@ -225,6 +225,7 @@ def evaluate_us_technical_checklist(row: Any) -> Dict[str, Any]:
     else:
         m, ok, note = 0.0, False, "Severe relative weakness vs S&P 500."
     items.append(_item("3M Alpha vs S&P 500", f"{alpha:+.1f}%", m, 8, ok, note))
+    items.append(_week52_range_item(row, close))
 
     if rel_vol is None:
         items.append(

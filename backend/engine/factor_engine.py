@@ -471,6 +471,47 @@ def compute_peer_relative_valuation(leaderboard: pd.DataFrame) -> pd.DataFrame:
     return df.drop(columns=["_pack"])
 
 
+def _week52_range_item(row: Any, close: float) -> Dict[str, Any]:
+    """Minervini Trend Template conditions 6-7 of 8: price should sit at
+    least 30% above its 52-week low and within 25% of its 52-week high —
+    a stock still hugging its 52-week low doesn't qualify as a confirmed
+    uptrend no matter what its moving averages say. week52_high/week52_low
+    are real (from the same OHLCV history already fetched for SMA/RSI/ATR),
+    never fabricated — shared by both markets since the logic isn't
+    market-specific, only the underlying price data is.
+    """
+    week52_high = _optional(row, "week52_high")
+    week52_low = _optional(row, "week52_low")
+    if week52_high is None or week52_low is None or week52_high <= 0 or week52_low <= 0 or close <= 0:
+        return _item(
+            "52-Week Range Position",
+            "N/A (history unavailable)",
+            0.0,
+            0,
+            True,
+            "Skipped — 52-week high/low not available for this row yet; does not block the name.",
+        )
+    above_low_pct = (close - week52_low) / week52_low * 100.0
+    below_high_pct = (week52_high - close) / week52_high * 100.0
+    far_above_low = above_low_pct >= 30
+    near_high = below_high_pct <= 25
+    display = f"+{above_low_pct:.0f}% off low / -{below_high_pct:.0f}% off high"
+    if far_above_low and near_high:
+        return _item(
+            "52-Week Range Position", display, 6.0, 6, True,
+            "Stage-2 position — 30%+ above the 52-week low and within 25% of the 52-week high (Minervini Trend Template).",
+        )
+    if far_above_low or near_high:
+        return _item(
+            "52-Week Range Position", display, 3.0, 6, False,
+            "Partial — clears only one of the two 52-week range conditions.",
+        )
+    return _item(
+        "52-Week Range Position", display, 0.0, 6, False,
+        "Weak range position — too close to its 52-week low to call a confirmed uptrend by this measure.",
+    )
+
+
 def evaluate_technical_checklist(row: Any, history: Optional[pd.DataFrame] = None) -> Dict[str, Any]:
     """Powerful technical checklist — marks out of 50."""
     items: List[Dict[str, Any]] = []
@@ -525,6 +566,7 @@ def evaluate_technical_checklist(row: Any, history: Optional[pd.DataFrame] = Non
     else:
         m, ok, note = 0.0, False, "Severe relative weakness vs Nifty."
     items.append(_item("3M Alpha vs Nifty", f"{alpha:+.1f}%", m, 8, ok, note))
+    items.append(_week52_range_item(row, close))
 
     if delivery is None:
         # NSE's own daily bhavcopy (DELIV_PER) — real data, free — see

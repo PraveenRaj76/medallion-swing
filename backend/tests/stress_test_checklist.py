@@ -35,6 +35,7 @@ if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
 from engine import factor_engine as fe  # noqa: E402
 from engine import factor_engine_us as feus  # noqa: E402
 from engine import data_pipeline as pipe  # noqa: E402
+from providers import nse_data_provider as nse  # noqa: E402
 
 PASS = 0
 FAIL = 0
@@ -228,6 +229,134 @@ string_row = {
     "rsi_14": "not_a_number",
 }
 run_no_crash("evaluate_technical_checklist(string-typed close/sma, garbage rsi)", fe.evaluate_technical_checklist, string_row)
+
+print("\n=== 10. 52-Week Range Position item (Minervini gap #2) ===")
+strong_range_row = {"close_price": 100.0, "sma_200": 90.0, "week52_high": 105.0, "week52_low": 60.0}
+weak_range_row = {"close_price": 62.0, "sma_200": 90.0, "week52_high": 105.0, "week52_low": 60.0}
+missing_range_row = {"close_price": 100.0, "sma_200": 90.0}
+
+strong_item = fe._week52_range_item(strong_range_row, 100.0)
+weak_item = fe._week52_range_item(weak_range_row, 62.0)
+missing_item = fe._week52_range_item(missing_range_row, 100.0)
+
+check(
+    "Strong 52-week position (67% off low, 5% off high) scores full marks",
+    strong_item["passed"] is True and strong_item["marks"] == 6.0,
+    f"item={strong_item}",
+)
+check(
+    "Weak 52-week position (3% off low) does NOT score full marks",
+    weak_item["passed"] is False and weak_item["marks"] < 6.0,
+    f"item={weak_item}",
+)
+check(
+    "Missing week52 data is skipped (max_marks=0), not scored good or bad",
+    missing_item["max_marks"] == 0 and missing_item["passed"] is True,
+    f"item={missing_item}",
+)
+check(
+    "Both India and US technical checklists include the item when data is present",
+    any(i["name"] == "52-Week Range Position" for i in fe.evaluate_technical_checklist(strong_range_row)["items"])
+    and any(i["name"] == "52-Week Range Position" for i in feus.evaluate_us_technical_checklist(strong_range_row)["items"]),
+)
+
+print("\n=== 11. Market regime gate (CANSLIM 'M' gap #1) ===")
+import importlib
+db_mod = importlib.import_module("db.database_engine")
+
+# This is the one section of this file that touches persistent state (the
+# real dev DB, not an isolated test DB — unlike e2e_regression.py). Save
+# and restore whatever was cached before this test ran so a stress-test
+# run never leaves the live regime cache in a stale/test state for the
+# actual app to read until the next real refresh recomputes it.
+_regime_before = db_mod.get_meta(db_mod.META_MARKET_REGIME_IN)
+
+# Directly exercise the gate logic (not the live index fetch — that needs
+# network access this test suite shouldn't depend on) by writing a known
+# regime straight into the same cache evaluate_buy_signal reads from.
+db_mod.set_meta(db_mod.META_MARKET_REGIME_IN, '{"risk_on": false, "index": "^NSEI", "index_close": 100, "index_sma200": 110, "as_of": "2026-08-30"}')
+regime_off = pipe.get_market_regime("IN")
+check("get_market_regime reads back a cached RISK_OFF regime", regime_off is not None and regime_off["risk_on"] is False, f"regime={regime_off}")
+
+db_mod.set_meta(db_mod.META_MARKET_REGIME_IN, '{"risk_on": true, "index": "^NSEI", "index_close": 120, "index_sma200": 110, "as_of": "2026-08-30"}')
+regime_on = pipe.get_market_regime("IN")
+check("get_market_regime reads back a cached RISK_ON regime", regime_on is not None and regime_on["risk_on"] is True, f"regime={regime_on}")
+
+db_mod.set_meta(db_mod.META_MARKET_REGIME_IN, "")
+check("Uncomputed regime (no refresh yet) reads back as None, not a false block", pipe.get_market_regime("IN") is None)
+
+# Now exercise it through the real gate list, not just the cache reader.
+sample_row = {
+    "ticker": "TESTCO", "data_quality": "SOURCED", "close_price": 100.0, "sma_200": 90.0,
+    "rsi_14": 50.0, "pe_peer_percentile": 10.0, "peg_ratio": 0.8,
+}
+sample_scorecard = {"composite_pct": 80.0, "fundamental": {"pct": 80.0}}
+
+db_mod.set_meta(db_mod.META_MARKET_REGIME_IN, '{"risk_on": false, "index": "^NSEI", "index_close": 100, "index_sma200": 110, "as_of": "2026-08-30"}')
+signal_regime_off = pipe.evaluate_buy_signal(sample_row, sample_scorecard, user_id=999999, market="IN")
+gate_off = next((g for g in signal_regime_off["gates"] if g["gate"] == "market_regime"), None)
+check(
+    "RISK_OFF regime blocks the market_regime gate even when every stock-level gate passes",
+    gate_off is not None and gate_off["passed"] is False,
+    f"gate={gate_off}",
+)
+
+db_mod.set_meta(db_mod.META_MARKET_REGIME_IN, '{"risk_on": true, "index": "^NSEI", "index_close": 120, "index_sma200": 110, "as_of": "2026-08-30"}')
+signal_regime_on = pipe.evaluate_buy_signal(sample_row, sample_scorecard, user_id=999999, market="IN")
+gate_on = next((g for g in signal_regime_on["gates"] if g["gate"] == "market_regime"), None)
+check(
+    "RISK_ON regime passes the market_regime gate",
+    gate_on is not None and gate_on["passed"] is True,
+    f"gate={gate_on}",
+)
+
+db_mod.set_meta(db_mod.META_MARKET_REGIME_IN, "")
+signal_no_regime = pipe.evaluate_buy_signal(sample_row, sample_scorecard, user_id=999999, market="IN")
+gate_none = next((g for g in signal_no_regime["gates"] if g["gate"] == "market_regime"), None)
+check(
+    "Uncomputed regime does not block a signal (graceful degradation, not a false negative)",
+    gate_none is not None and gate_none["passed"] is True,
+    f"gate={gate_none}",
+)
+
+db_mod.set_meta(db_mod.META_MARKET_REGIME_IN, _regime_before or "")
+
+print("\n=== 12. NaN-close trailing bar (real, observed live-data quirk) ===")
+# Found live during this session's market-regime work: yfinance sometimes
+# returns a most-recent bar with a real Date but a NaN close (not yet
+# settled at fetch time). sma_50/sma_200 tolerated it silently (pandas
+# .mean() skips NaN by default) while close_price/RSI did not — this is
+# what made an earlier /api/profile/AAPL?live=true 500 look transient and
+# unreproducible; it wasn't transient, it was this exact shape of row.
+good_frame = pd.DataFrame({
+    "open": [100.0, 101.0, 102.0],
+    "high": [101.0, 102.0, 103.0],
+    "low": [99.0, 100.0, 101.0],
+    "close": [100.5, 101.5, 102.5],
+    "volume": [1000, 1100, 1200],
+})
+broken_frame = pd.DataFrame({
+    "open": [100.0, 101.0, 102.0],
+    "high": [101.0, 102.0, 103.0],
+    "low": [99.0, 100.0, 101.0],
+    "close": [100.5, 101.5, float("nan")],
+    "volume": [1000, 1100, 1200],
+})
+cleaned = nse._clean_ohlcv(broken_frame)
+check(
+    "_clean_ohlcv drops the trailing NaN-close bar",
+    len(cleaned) == 2 and not cleaned["close"].isna().any(),
+    f"cleaned closes={cleaned['close'].tolist()}",
+)
+check(
+    "_clean_ohlcv leaves a fully-clean frame untouched",
+    len(nse._clean_ohlcv(good_frame)) == 3,
+)
+check(
+    "close_price extraction on the cleaned frame is the last REAL close, not NaN",
+    float(cleaned["close"].iloc[-1]) == 101.5,
+    f"got {cleaned['close'].iloc[-1]}",
+)
 
 print("\n" + "=" * 60)
 print(f"STRESS TEST SUMMARY: {PASS}/{PASS + FAIL} PASSED | {FAIL} FAILED")

@@ -99,6 +99,13 @@ export const US_TECHNICAL_EXPLAINERS: ExplainerItem[] = [
     scoring: '≥10% → 8/8 · 0–10% → 5/8 · -8% to 0% → 2/8 · below -8% → 0/8.',
   },
   {
+    name: '52-Week Range Position',
+    maxMarks: 6,
+    what: "Where the current price sits between its own 52-week low and high — specifically, is it at least 30% above the low AND within 25% of the high. Borrowed directly from Mark Minervini's Trend Template (conditions 6-7 of 8); identical logic to the India checklist's version.",
+    why: "A stock can be above its 200/50-day averages and still be limping along near its yearly low — moving averages alone don't catch that.",
+    scoring: 'Both conditions met → 6/6 (stage-2 position) · one of the two → 3/6 (partial) · neither → 0/6 (too close to its low).',
+  },
+  {
     name: 'Relative Volume',
     maxMarks: 5,
     what: "Today's trading volume divided by its own trailing 20-day average — real, computed from the same Yahoo Finance OHLCV series used for price. There's no US equivalent of NSE's delivery-percentage disclosure, so this is the standard swing-trading substitute for \"is real participation showing up right now.\"",

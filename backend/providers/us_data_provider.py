@@ -414,7 +414,13 @@ def fetch_ohlcv(ticker: str, period: str = "1y", interval: str = "1d") -> Option
         frame = hist.rename(
             columns={"Open": "open", "High": "high", "Low": "low", "Close": "close", "Volume": "volume"}
         )
-        return frame[["open", "high", "low", "close", "volume"]]
+        frame = frame[["open", "high", "low", "close", "volume"]]
+        # See nse_data_provider._clean_ohlcv — the same "most recent bar has
+        # a NaN close" quirk shows up on the US (yfinance) side too; drop
+        # it here so close_price/RSI/day-bar extraction never silently
+        # inherit a NaN from an unsettled last row.
+        frame = frame[frame["close"].notna()]
+        return frame if not frame.empty else None
     except Exception as exc:
         logger.debug("US OHLCV fetch failed for %s: %s", ticker, exc)
         return None

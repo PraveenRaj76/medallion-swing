@@ -5,6 +5,7 @@ Live NSE quotes · Fixed Quantity = 1 · SUCCESSFUL TRADE / BAD TRADE clearance
 
 from __future__ import annotations
 
+import json
 import logging
 import math
 import os
@@ -603,6 +604,8 @@ def _build_price_row_from_live(
             "atr_value": float(prior.get("atr_value") or max(px * 0.02, 0.05)),
             "alpha_3m": float(prior.get("alpha_3m") or 0.0),
             "delivery_pct_10d": float(prior.get("delivery_pct_10d") or 45.0),
+            "week52_high": prior.get("week52_high"),
+            "week52_low": prior.get("week52_low"),
         }
         has_ohlcv = True
     else:
@@ -618,6 +621,8 @@ def _build_price_row_from_live(
             "atr_value": round(atr_est, 2),
             "alpha_3m": 0.0,
             "delivery_pct_10d": 0.0,
+            "week52_high": prior.get("week52_high"),
+            "week52_low": prior.get("week52_low"),
         }
     src = str(quote.get("source") or "live")
     price_kind = str(quote.get("price_kind") or "LIVE").upper()
@@ -646,6 +651,8 @@ def _build_price_row_from_live(
         "rsi_14": tech["rsi_14"],
         "delivery_pct_10d": tech["delivery_pct_10d"],
         "alpha_3m": tech["alpha_3m"],
+        "week52_high": tech.get("week52_high"),
+        "week52_low": tech.get("week52_low"),
         "roic": prior.get("roic"),
         "net_debt_ebitda": prior.get("net_debt_ebitda"),
         "peg_ratio": prior.get("peg_ratio"),
@@ -1146,7 +1153,11 @@ def refresh_verified_live(
         price_ok = sum(1 for q in quotes.values() if q.get("ok"))
         result["price_ok"] = price_ok
 
-        bench = nse.fetch_ohlcv(nse.BENCHMARK, range_param="6mo", interval="1d") if with_ohlcv else None
+        # 1y (not 6mo) — alpha_3m only ever looks at the trailing ~63 sessions
+        # regardless of how much history is fetched, but compute_and_cache_
+        # market_regime() below needs a real 200-session window to compute
+        # the benchmark's own 200-day SMA.
+        bench = nse.fetch_ohlcv(nse.BENCHMARK, range_param="1y", interval="1d") if with_ohlcv else None
         live_syms = [s for s, q in quotes.items() if q.get("ok")]
         hist_map: Dict[str, pd.DataFrame] = {}
         ohlcv_ok = 0
@@ -1221,6 +1232,11 @@ def refresh_verified_live(
         for i in range(0, len(accepted_rows), 50):
             db.upsert_leaderboard_rows(accepted_rows[i : i + 50])
 
+        try:
+            compute_and_cache_market_regime("IN")
+        except Exception as exc:
+            logger.warning("market regime refresh failed (non-fatal): %s", exc)
+
         result["accepted"] = len(accepted_rows)
         result["rejected"] = rejected
         result["reject_reasons"] = reasons
@@ -1272,6 +1288,10 @@ def refresh_us_verified_live(tickers: Optional[List[str]] = None, user_id: Optio
         result.update(outcome)
         for i in range(0, len(rows), 50):
             db.upsert_leaderboard_rows(rows[i : i + 50])
+        try:
+            compute_and_cache_market_regime("US")
+        except Exception as exc:
+            logger.warning("market regime refresh failed (non-fatal): %s", exc)
         if user_id is not None:
             result["clearances"] = validate_active_signals(int(user_id))
         db.set_screener_refresh_state(as_of=db.today_ist(), status="complete", message=result["message"])
@@ -1492,7 +1512,75 @@ def check_buyability(row: pd.Series) -> Tuple[bool, str]:
     return True, "SIGNAL CLEAR: Passes 200 SMA / RSI filters."
 
 
-def evaluate_buy_signal(row: Dict[str, Any], scorecard: Dict[str, Any], user_id: int) -> Dict[str, Any]:
+def compute_and_cache_market_regime(market: str) -> Dict[str, Any]:
+    """Is the broader index itself in an uptrend right now?
+
+    Real, documented evidence (CANSLIM's "M" — general market direction —
+    criterion; published backtests gating entries on index-vs-200SMA across
+    multiple bear markets) shows this measurably matters: a stock can clear
+    every individual fundamental/technical gate while the whole market is
+    in a confirmed downtrend, and that's exactly the condition under which
+    otherwise-good setups fail most often. Nothing in evaluate_buy_signal
+    checked this before — every gate was stock-level only.
+
+    Computed once per full universe refresh (not per BUY-signal check —
+    that would mean a fresh index fetch on every Search Profile page load)
+    and cached via db.set_meta; evaluate_buy_signal reads the cached value
+    through get_market_regime(). Needs a full year of index history to
+    compute a real 200-day SMA (the existing 3-month alpha_3m benchmark
+    fetch elsewhere only pulls 6mo, not enough for this).
+    """
+    market = market.upper()
+    if market == "US":
+        from providers import us_data_provider as usdp
+
+        bench = usdp.fetch_ohlcv(usdp.BENCHMARK, period="1y")
+        index_name = usdp.BENCHMARK
+        meta_key = db.META_MARKET_REGIME_US
+    else:
+        bench = nse.fetch_ohlcv(nse.BENCHMARK, range_param="1y", interval="1d")
+        index_name = nse.BENCHMARK
+        meta_key = db.META_MARKET_REGIME_IN
+
+    regime: Dict[str, Any] = {
+        "risk_on": None,
+        "index": index_name,
+        "index_close": None,
+        "index_sma200": None,
+        "as_of": None,
+    }
+    if bench is not None and not bench.empty and len(bench) >= 200:
+        closes = bench["close"].astype(float)
+        sma200 = nse._sma(closes, 200)
+        last_close = float(closes.iloc[-1])
+        regime = {
+            "risk_on": bool(last_close > sma200),
+            "index": index_name,
+            "index_close": round(last_close, 2),
+            "index_sma200": round(sma200, 2),
+            "as_of": db.today_ist(),
+        }
+    db.set_meta(meta_key, json.dumps(regime))
+    return regime
+
+
+def get_market_regime(market: str) -> Optional[Dict[str, Any]]:
+    """Cached result of the last compute_and_cache_market_regime() run, or
+    None if a full refresh hasn't computed one yet (e.g. a fresh deploy) —
+    evaluate_buy_signal treats "not yet known" as a pass, not a block."""
+    meta_key = db.META_MARKET_REGIME_US if market.upper() == "US" else db.META_MARKET_REGIME_IN
+    raw = db.get_meta(meta_key)
+    if not raw:
+        return None
+    try:
+        return json.loads(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def evaluate_buy_signal(
+    row: Dict[str, Any], scorecard: Dict[str, Any], user_id: int, market: str = "IN"
+) -> Dict[str, Any]:
     """Multi-gate BUY confluence check (Decision Engine Blueprint 1.1).
 
     `row` is a leaderboard/live row (dict or Series); `scorecard` is
@@ -1535,6 +1623,21 @@ def evaluate_buy_signal(row: Dict[str, Any], scorecard: Dict[str, Any], user_id:
         "gate": "technical_trend",
         "passed": trend_ok,
         "detail": f"close={close:.2f} vs 200SMA={sma_200:.2f}, RSI={rsi_14:.1f}",
+    })
+
+    regime = get_market_regime(market)
+    regime_ok = regime is None or regime.get("risk_on") is not False
+    if regime and regime.get("risk_on") is not None:
+        regime_detail = (
+            f"{regime['index']} {'above' if regime['risk_on'] else 'below'} its own 200SMA "
+            f"(close {regime.get('index_close')} vs {regime.get('index_sma200')}, as of {regime.get('as_of')})"
+        )
+    else:
+        regime_detail = "not yet computed — run a full universe refresh"
+    gates.append({
+        "gate": "market_regime",
+        "passed": regime_ok,
+        "detail": regime_detail,
     })
 
     pe_pctl = row.get("pe_peer_percentile")

@@ -163,6 +163,9 @@ META_SCREENER_STATUS = "screener_refresh_status"  # idle | running | complete | 
 META_SCREENER_MSG = "screener_refresh_message"
 META_REFRESH_T0 = "screener_refresh_t0"
 META_REFRESH_COMPLETE0 = "screener_refresh_complete0"
+# Cached market-regime snapshot (JSON) — see data_pipeline.compute_and_cache_market_regime.
+META_MARKET_REGIME_IN = "market_regime_in"
+META_MARKET_REGIME_US = "market_regime_us"
 LOAD_MAX_RETRIES = 3
 
 EXIT_SUCCESS = "SUCCESSFUL TRADE"
@@ -629,6 +632,11 @@ def _ensure_leaderboard_extra_columns(cursor: sqlite3.Cursor) -> None:
         # India-only; left NULL for US rows and for any stock whose pack had
         # too few peers (<5) to rank meaningfully.
         "pe_peer_percentile": "REAL",
+        # 52-week high/low — real, from the same 1y OHLCV history already
+        # fetched for SMA/RSI/ATR. Feeds the "52-Week Range Position"
+        # checklist item (factor_engine._week52_range_item).
+        "week52_high": "REAL",
+        "week52_low": "REAL",
     }
     for name, decl in additions.items():
         if name not in cols:
@@ -1211,6 +1219,16 @@ def upsert_leaderboard_rows(rows: List[Dict[str, Any]]) -> bool:
                     )
                 except (TypeError, ValueError):
                     pe_peer_percentile = None
+                week52_high = row.get("week52_high")
+                try:
+                    week52_high = float(week52_high) if week52_high is not None and pd.notna(week52_high) else None
+                except (TypeError, ValueError):
+                    week52_high = None
+                week52_low = row.get("week52_low")
+                try:
+                    week52_low = float(week52_low) if week52_low is not None and pd.notna(week52_low) else None
+                except (TypeError, ValueError):
+                    week52_low = None
                 cursor.execute(
                     """
                     INSERT INTO screener_leaderboard (
@@ -1221,8 +1239,9 @@ def upsert_leaderboard_rows(rows: List[Dict[str, Any]]) -> bool:
                         promoter_pledge_pct, yoy_profit_growth, sma_50, sma_200,
                         rsi_14, delivery_pct_10d, alpha_3m,
                         pe_ratio, pb_ratio, roe, data_quality, fundamentals_verified, sources_ok_count,
-                        ohlcv_ready, price_source, price_kind, prev_close, market, pe_peer_percentile
-                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                        ohlcv_ready, price_source, price_kind, prev_close, market, pe_peer_percentile,
+                        week52_high, week52_low
+                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                     ON CONFLICT(ticker) DO UPDATE SET
                         company_name=excluded.company_name,
                         description=excluded.description,
@@ -1257,7 +1276,9 @@ def upsert_leaderboard_rows(rows: List[Dict[str, Any]]) -> bool:
                         price_kind=COALESCE(excluded.price_kind, screener_leaderboard.price_kind),
                         prev_close=COALESCE(excluded.prev_close, screener_leaderboard.prev_close),
                         market=excluded.market,
-                        pe_peer_percentile=COALESCE(excluded.pe_peer_percentile, screener_leaderboard.pe_peer_percentile)
+                        pe_peer_percentile=COALESCE(excluded.pe_peer_percentile, screener_leaderboard.pe_peer_percentile),
+                        week52_high=COALESCE(excluded.week52_high, screener_leaderboard.week52_high),
+                        week52_low=COALESCE(excluded.week52_low, screener_leaderboard.week52_low)
                     """,
                     (
                         row["ticker"], row.get("company_name", row["ticker"]),
@@ -1283,6 +1304,8 @@ def upsert_leaderboard_rows(rows: List[Dict[str, Any]]) -> bool:
                         prev_close,
                         str(row.get("market") or "IN").upper(),
                         pe_peer_percentile,
+                        week52_high,
+                        week52_low,
                     ),
                 )
         return True
