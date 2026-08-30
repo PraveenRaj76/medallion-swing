@@ -27,8 +27,8 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Optional
 
-import free_extra_sources as extra
-import nse_xbrl_provider as prov
+from providers import free_extra_sources as extra
+from providers import nse_xbrl_provider as prov
 
 logger = logging.getLogger(__name__)
 

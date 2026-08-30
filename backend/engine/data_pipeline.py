@@ -15,8 +15,8 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
-import database_engine as db
-import nse_data_provider as nse
+from db import database_engine as db
+from providers import nse_data_provider as nse
 
 logger = logging.getLogger(__name__)
 
@@ -268,7 +268,7 @@ def validate_active_signals(user_id: int) -> List[Dict[str, Any]]:
                 # for a US ticker (or vice versa) would either find nothing
                 # or, worse, misresolve a coincidentally-matching symbol.
                 if pos_market == "US":
-                    import us_data_provider as usdp
+                    from providers import us_data_provider as usdp
 
                     try:
                         market = usdp.build_live_row(ticker)
@@ -525,7 +525,7 @@ def filter_display_ready(frame: Optional[pd.DataFrame], market: str = "IN") -> p
     if not db.screener_is_today():
         return pd.DataFrame()
     if market.upper() == "US":
-        import us_data_provider as usdp
+        from providers import us_data_provider as usdp
 
         # load_universe() returns dicts (ticker, company_name, sector, ...),
         # not plain strings like nse.load_universe() — pull the ticker out.
@@ -1083,7 +1083,7 @@ def refresh_verified_live(
 ) -> Dict[str, Any]:
     """Refresh latest live CMP for full swing universe (Groww/MC/Yahoo)."""
     from concurrent.futures import ThreadPoolExecutor, as_completed
-    import live_price_feed as lpf
+    from providers import live_price_feed as lpf
 
     result: Dict[str, Any] = {
         "attempted": 0,
@@ -1113,7 +1113,7 @@ def refresh_verified_live(
                     d["technical_score"] = 40.0
                 tagged.append(d)
             if tagged:
-                import factor_engine as factors
+                from engine import factor_engine as factors
 
                 peer_df = factors.compute_peer_relative_valuation(pd.DataFrame(tagged))
                 if peer_df is not None and "pe_peer_percentile" in peer_df.columns:
@@ -1212,7 +1212,7 @@ def refresh_verified_live(
         # small/partial refresh doesn't blank out a good value from an
         # earlier full-universe refresh).
         if accepted_rows:
-            import factor_engine as factors
+            from engine import factor_engine as factors
 
             peer_df = factors.compute_peer_relative_valuation(pd.DataFrame(accepted_rows))
             if peer_df is not None and "pe_peer_percentile" in peer_df.columns:
@@ -1255,7 +1255,7 @@ def refresh_us_verified_live(tickers: Optional[List[str]] = None, user_id: Optio
     market='US'. Mirrors refresh_verified_live's shape (attempted/accepted/
     rejected/message) so the same frontend refresh-status handling works
     for both markets."""
-    import us_data_provider as usdp
+    from providers import us_data_provider as usdp
 
     result: Dict[str, Any] = {
         "attempted": 0,

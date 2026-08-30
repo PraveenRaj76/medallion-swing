@@ -27,7 +27,9 @@ from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
-BASE_DIR = Path(__file__).resolve().parent
+# This file lives in backend/providers/ — cache files live in backend/data/,
+# one level up.
+BASE_DIR = Path(__file__).resolve().parent.parent
 SCRIP_MAP_PATH = BASE_DIR / "data" / "bse_scrip_map.json"
 SCRIP_MAP_MAX_AGE_SEC = 7 * 24 * 3600
 

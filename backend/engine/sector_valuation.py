@@ -42,6 +42,7 @@ free/paid tools actually do this (not invented from scratch):
 from __future__ import annotations
 
 import logging
+import math
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
@@ -116,7 +117,16 @@ def _pct_return(closes, lookback: int) -> Optional[float]:
     try:
         start = float(closes.iloc[-lookback - 1])
         end = float(closes.iloc[-1])
-        if start <= 0:
+        # A real gap day in the fetched price series (yfinance can return one
+        # for a thinly-traded ETF) shows up as NaN here, not an exception —
+        # float('nan') <= 0 is False, so the guard below silently let a NaN
+        # through into the API response and crashed JSON serialization
+        # (json.dumps correctly refuses NaN; found via a live /api/sectors
+        # 500 while re-verifying this module after the backend/ restructure,
+        # though the bug itself predates that move — this function's logic
+        # was untouched by it). Treat NaN the same as any other unusable
+        # input: None, not a fabricated 0.
+        if math.isnan(start) or math.isnan(end) or start <= 0:
             return None
         return (end / start - 1.0) * 100.0
     except Exception:

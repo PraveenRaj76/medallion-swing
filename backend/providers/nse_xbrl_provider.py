@@ -41,7 +41,7 @@ import logging
 import re
 from typing import Any, Dict, Optional
 
-import free_extra_sources as extra
+from providers import free_extra_sources as extra
 
 logger = logging.getLogger(__name__)
 

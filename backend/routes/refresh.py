@@ -12,8 +12,8 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
 
-import data_pipeline as pipeline
-import database_engine as db
+from engine import data_pipeline as pipeline
+from db import database_engine as db
 
 from ._util import default_user_id
 from models.schemas import RefreshRequest, TradeCloseRequest, TradeOpenRequest

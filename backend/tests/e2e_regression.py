@@ -34,12 +34,19 @@ for _stream in (sys.stdout, sys.stderr):
         _stream.reconfigure(encoding="utf-8", errors="replace")
 from pathlib import Path
 
-BASE = Path(__file__).resolve().parent
-sys.path.insert(0, str(BASE))
-os.chdir(BASE)
+# This file lives in backend/tests/ — BACKEND_ROOT (backend/) is what needs
+# to be on sys.path and be the working directory, since that's where the
+# db/engine/providers/routes/models packages this suite imports actually
+# live (matching how uvicorn is run in production: from backend/, not
+# backend/tests/).
+HERE = Path(__file__).resolve().parent
+BACKEND_ROOT = HERE.parent
+sys.path.insert(0, str(BACKEND_ROOT))
+os.chdir(BACKEND_ROOT)
 
-# Isolate test DB BEFORE importing engine (engine inits on import)
-TEST_DB = BASE / "e2e_test_medallion.db"
+# Isolate test DB BEFORE importing engine (engine inits on import) — lives in
+# backend/data/ alongside the real one, same convention, still gitignored.
+TEST_DB = BACKEND_ROOT / "data" / "e2e_test_medallion.db"
 if TEST_DB.exists():
     try:
         TEST_DB.unlink()
@@ -53,14 +60,14 @@ os.environ["MEDALLION_MARKET_MODE"] = "mock"
 
 # Ensure database_engine honors MEDALLION_DB_PATH
 import importlib
-import database_engine as db
+from db import database_engine as db
 
 db.DATABASE_PATH = os.environ["MEDALLION_DB_PATH"]
 importlib.reload(db)
 db.DATABASE_PATH = os.environ["MEDALLION_DB_PATH"]
 db.init_database()
 
-import data_pipeline as pipe
+from engine import data_pipeline as pipe
 importlib.reload(pipe)
 
 
@@ -88,21 +95,21 @@ def main() -> int:
     password = "pass1234"
 
     # ------------------------------------------------------------------
-    section("0. Workspace Integrity — backend/ layout")
+    section("0. Workspace Integrity — backend/{db,engine,providers,routes} layout")
     # ------------------------------------------------------------------
     try:
         required = [
-            BASE / "main.py",
-            BASE / "database_engine.py",
-            BASE / "data_pipeline.py",
-            BASE / "nse_data_provider.py",
-            BASE / "us_data_provider.py",
-            BASE / "factor_engine.py",
-            BASE / "factor_engine_us.py",
-            BASE / "routes" / "screener.py",
-            BASE / "data" / "nse_universe.txt",
+            BACKEND_ROOT / "main.py",
+            BACKEND_ROOT / "db" / "database_engine.py",
+            BACKEND_ROOT / "engine" / "data_pipeline.py",
+            BACKEND_ROOT / "engine" / "factor_engine.py",
+            BACKEND_ROOT / "engine" / "factor_engine_us.py",
+            BACKEND_ROOT / "providers" / "nse_data_provider.py",
+            BACKEND_ROOT / "providers" / "us_data_provider.py",
+            BACKEND_ROOT / "routes" / "screener.py",
+            BACKEND_ROOT / "data" / "nse_universe.txt",
         ]
-        missing = [str(p.name) for p in required if not p.exists()]
+        missing = [str(p.relative_to(BACKEND_ROOT)) for p in required if not p.exists()]
         log("Workspace files present", len(missing) == 0, f"missing={missing}")
     except Exception as exc:
         log("Workspace integrity", False, traceback.format_exc()[-300:])
@@ -245,7 +252,7 @@ def main() -> int:
     section("4b. Factor Engine — Checklist Scoring + Data-Quality Gates")
     # ------------------------------------------------------------------
     try:
-        import factor_engine as fe
+        from engine import factor_engine as fe
 
         tcs = db.get_ticker_row("TCS")
         card = fe.full_factor_scorecard(tcs)
@@ -281,12 +288,13 @@ def main() -> int:
         )
         log(
             "Multi-source module present",
-            (BASE / "multi_source_data.py").exists()
-            and "fetch_verified_fundamentals" in (BASE / "multi_source_data.py").read_text(encoding="utf-8"),
+            (BACKEND_ROOT / "providers" / "multi_source_data.py").exists()
+            and "fetch_verified_fundamentals"
+            in (BACKEND_ROOT / "providers" / "multi_source_data.py").read_text(encoding="utf-8"),
             "ok",
         )
         # Consensus helper unit test
-        import multi_source_data as msd
+        from providers import multi_source_data as msd
 
         val, status, _ = msd.consensus_metric(
             "pe_ratio",
@@ -340,9 +348,9 @@ def main() -> int:
             isinstance(db.list_leaderboard_tickers(), list) and len(db.list_leaderboard_tickers()) > 0,
             f"n={len(db.list_leaderboard_tickers())}",
         )
-        yf_helper = "def _fetch_ohlcv_yfinance" in (BASE / "nse_data_provider.py").read_text(
-            encoding="utf-8"
-        )
+        yf_helper = "def _fetch_ohlcv_yfinance" in (
+            BACKEND_ROOT / "providers" / "nse_data_provider.py"
+        ).read_text(encoding="utf-8")
         log("yfinance OHLCV fallback wired", yf_helper, "ok")
     except Exception as exc:
         log("Factor engine", False, traceback.format_exc()[-400:])

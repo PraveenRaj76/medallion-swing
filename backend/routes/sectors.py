@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Query
 
-import sector_engine
+from engine import sector_engine
 
 router = APIRouter()
 

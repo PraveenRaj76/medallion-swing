@@ -14,12 +14,12 @@ from typing import Any, Dict, Optional
 import pandas as pd
 from fastapi import APIRouter, HTTPException, Query
 
-import data_pipeline as pipeline
-import database_engine as db
-import factor_engine as factors
-import factor_engine_us as factors_us
-import nse_data_provider as nse
-import us_data_provider as usdp
+from db import database_engine as db
+from engine import data_pipeline as pipeline
+from engine import factor_engine as factors
+from engine import factor_engine_us as factors_us
+from providers import nse_data_provider as nse
+from providers import us_data_provider as usdp
 
 from ._util import default_user_id, series_to_dict
 
@@ -50,7 +50,7 @@ def _build_quote(row: Dict[str, Any], market: str, ticker: str) -> Dict[str, Any
 
     if market == "IN":
         try:
-            import live_price_feed as lpf
+            from providers import live_price_feed as lpf
 
             live = lpf.fetch_live_quote(ticker)
         except Exception:

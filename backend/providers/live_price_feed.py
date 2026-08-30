@@ -52,8 +52,10 @@ ANGEL_CONFIGURED = bool(ANGEL_API_KEY and ANGEL_CLIENT_ID and ANGEL_PASSWORD and
 SCRIP_MASTER_URL = (
     "https://margincalculator.angelone.in/OpenAPI_File/files/OpenAPIScripMaster.json"
 )
+# This file lives in backend/providers/ — cache files live in backend/data/,
+# one level up.
 _SCRIP_CACHE_PATH = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), "data", "angel_scrip_master.json"
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "angel_scrip_master.json"
 )
 _SCRIP_CACHE_MAX_AGE_SEC = 24 * 3600  # instrument tokens rarely change; refresh daily
 
@@ -197,7 +199,7 @@ def _fetch_yahoo_quotes_batch(symbols: List[str]) -> Dict[str, Dict[str, Any]]:
     since the batch refresh otherwise fails 100% of symbols outright. A
     partial, rate-limit-risked real feed is strictly better than that.
     """
-    import nse_data_provider as ndp
+    from providers import nse_data_provider as ndp
     from concurrent.futures import ThreadPoolExecutor
 
     out: Dict[str, Dict[str, Any]] = {}

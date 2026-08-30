@@ -19,9 +19,11 @@ import pandas as pd
 
 logger = logging.getLogger(__name__)
 
+# This file lives in backend/db/ — the actual .db file lives in backend/data/
+# alongside the other on-disk data artifacts (cache files), one level up.
 DATABASE_PATH = os.environ.get(
     "MEDALLION_DB_PATH",
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "medallion_system.db"),
+    os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "medallion_system.db"),
 )
 _DB_LOCK = threading.RLock()
 

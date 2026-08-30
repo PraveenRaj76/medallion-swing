@@ -275,7 +275,7 @@ def fetch_screener(ticker: str) -> Dict[str, Any]:
 
 def _fetch_nse_filings_safe(symbol: str) -> Dict[str, Any]:
     try:
-        import free_extra_sources as extra
+        from providers import free_extra_sources as extra
 
         return extra.fetch_nse_filings(symbol)
     except Exception as exc:
@@ -288,7 +288,7 @@ def _fetch_nse_xbrl_safe(symbol: str) -> Dict[str, Any]:
     for how consolidated-vs-standalone selection and Interest Coverage were
     validated (2026-08-24) before this was trusted enough to wire in here."""
     try:
-        import nse_xbrl_provider as xbrl
+        from providers import nse_xbrl_provider as xbrl
 
         result = xbrl.fetch_latest_quarterly_xbrl(symbol)
         return result if result else {"source": "nse_xbrl", "ok": False}
