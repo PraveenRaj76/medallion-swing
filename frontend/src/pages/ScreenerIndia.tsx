@@ -169,7 +169,7 @@ export function ScreenerIndia() {
               <div className="kpi-val">
                 <CountUp value={buyableCount} />
               </div>
-              <div className="kpi-foot">close &gt; 200SMA &amp; RSI &le; 70</div>
+              <div className="kpi-foot">close &gt; 200SMA &amp; RSI &le; 65</div>
             </div>
             <div className="kpi">
               <div className="kpi-label">Median Score</div>

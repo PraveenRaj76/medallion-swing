@@ -186,7 +186,8 @@ def get_profile(
     trade_levels = None
     try:
         if atr and close_price and float(atr) > 0:
-            trade_levels = pipeline.build_trade_levels(float(close_price), float(atr))
+            levels = pipeline.build_trade_levels(float(close_price), float(atr))
+            trade_levels = levels if levels.get("valid") else None
     except (TypeError, ValueError):
         trade_levels = None
 
