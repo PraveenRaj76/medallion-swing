@@ -27,8 +27,8 @@ from typing import Any, Dict, List, Optional
 
 import pandas as pd
 
-import database_engine as db
-import sector_valuation
+from db import database_engine as db
+from engine import sector_valuation
 
 logger = logging.getLogger(__name__)
 

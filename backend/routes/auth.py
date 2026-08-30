@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
 
-import database_engine as db
+from db import database_engine as db
 from models.schemas import LoginRequest, RegisterRequest
 
 router = APIRouter()

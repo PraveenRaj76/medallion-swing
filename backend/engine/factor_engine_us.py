@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
-from factor_engine import CONFIDENCE_MULTIPLIER, _f, _item, _optional, _quality
+from engine.factor_engine import CONFIDENCE_MULTIPLIER, _f, _item, _optional, _quality
 
 
 def _is_financial_us(row: Any) -> bool:

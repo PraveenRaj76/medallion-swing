@@ -1,0 +1,483 @@
+================================================================================
+MEDALLION SWING — FOLDER STRUCTURE GUIDE
+================================================================================
+Last updated: 2026-08-30
+
+This file explains every folder and file in this repository: what it is,
+why it exists, and what you're expected to do with it (edit it, leave it
+alone, never commit it, etc). Read this top to bottom once and you should
+be able to find anything without searching.
+
+Two independent applications live in this one repository:
+
+    backend/   Python + FastAPI.  Owns ALL logic: fetching market data,
+               computing the fundamental/technical checklist scores,
+               tracking forward-test trades, talking to the database.
+               Exposes everything as a JSON HTTP API. Has no UI of its own.
+
+    frontend/  TypeScript + React + Vite.  Owns everything a human sees in
+               a browser. Talks to the backend ONLY over HTTP (the
+               /api/... endpoints). Has no business logic of its own — it
+               displays what the backend computed and sends user actions
+               (login, buy, refresh) back as API calls.
+
+Rule of thumb: if the change is "how is this number calculated / where does
+this data come from", edit backend/. If the change is "how does this look /
+where does this button live on the page", edit frontend/.
+
+
+================================================================================
+TOP-LEVEL LAYOUT
+================================================================================
+
+medallion-swing-updated/
+├── backend/              FastAPI application (see BACKEND section below)
+├── frontend/             React application (see FRONTEND section below)
+├── README.md             Start here — run instructions, architecture
+│                         summary, deploy steps. Keep this current whenever
+│                         you change how the project is run or deployed.
+├── render.yaml           Deploy blueprint for Render.com (see DEPLOYMENT
+│                         section below). Only touch this if you're
+│                         changing the deploy target or build/start command.
+├── .gitignore            Tells git which files/folders to never track
+│                         (secrets, virtual envs, build output, logs,
+│                         databases). See "WHAT'S DELIBERATELY NOT IN GIT"
+│                         near the end of this file before adding anything
+│                         that looks like it's missing.
+└── FOLDER_STRUCTURE.txt  This file.
+
+
+================================================================================
+BACKEND/  (Python, FastAPI)
+================================================================================
+
+backend/
+├── main.py               THE ENTRY POINT. Creates the FastAPI app, wires up
+│   │                     CORS, registers the startup DB-init hook, and
+│   │                     mounts every router from routes/. Also defines
+│   │                     SafeJSONResponse — a safety net that converts any
+│   │                     stray NaN/Infinity float to null before a response
+│   │                     goes out, since raw JSON has no NaN representation
+│   │                     and one leaking through would otherwise 500 the
+│   │                     whole request.
+│   │                     EDIT THIS WHEN: adding a new router, changing
+│   │                     CORS/allowed-origins behaviour, or changing what
+│   │                     happens on server startup.
+│   │                     RUN THIS WITH: uvicorn main:app --reload
+│   │                     (from inside backend/, with the venv active).
+│   │
+│   ├── requirements.txt  Python dependencies, pinned to safe version
+│   │                     ranges. Install with: pip install -r requirements.txt
+│   │                     EDIT THIS WHEN: you add a new Python package to
+│   │                     any file under backend/. Keep it free of anything
+│   │                     not actually imported — it was cleaned of unused
+│   │                     Streamlit-era packages (streamlit, plotly,
+│   │                     Pillow) on 2026-08-30; don't let that drift back.
+│   │
+│   └── .env.example      Template for the real .env file (which is
+│                         git-ignored and never committed). Copy it to
+│                         .env and fill in real values before running
+│                         locally. Documents every environment variable
+│                         the backend reads: Angel One API creds, Turso
+│                         DB creds, market mode, default user id.
+│                         EDIT THIS WHEN: you add a new os.environ.get(...)
+│                         call anywhere in the backend — document it here
+│                         so the next person knows it exists.
+│
+├── db/                    ── PERSISTENCE LAYER ──
+│   ├── __init__.py        Empty. Makes this folder an importable Python
+│   │                     package (`from db import database_engine`).
+│   │                     Leave it empty unless you have package-wide
+│   │                     init code that must run before anything in here.
+│   └── database_engine.py Every SQL statement in the whole application
+│                         lives here — table schema, user auth (register/
+│                         login), the screener leaderboard cache, open/close
+│                         forward-test positions, sector history snapshots.
+│                         Talks to SQLite locally, or Turso (hosted
+│                         libSQL) in production when TURSO_DATABASE_URL /
+│                         TURSO_AUTH_TOKEN are set (see USE_TURSO in this
+│                         file) — same SQL either way, via a small shim
+│                         that makes the Turso client look like a normal
+│                         DB-API cursor to pandas.
+│                         EDIT THIS WHEN: you need a new table, a new
+│                         query, or a new column. This is the ONLY file
+│                         that should contain raw SQL — don't scatter SQL
+│                         into routes/ or engine/.
+│
+├── engine/                ── CALCULATION / BUSINESS LOGIC LAYER ──
+│   ├── __init__.py        Empty. Makes this an importable package.
+│   ├── data_pipeline.py   Orchestrates a full universe refresh: pulls
+│   │                     tickers from providers/, runs them through
+│   │                     factor_engine, writes results to db/. This is
+│   │                     the "glue" module that routes/refresh.py and
+│   │                     routes/screener.py call into — it doesn't fetch
+│   │                     data itself (providers/ does) and doesn't score
+│   │                     data itself (factor_engine does).
+│   ├── factor_engine.py   THE CHECKLIST for India (NSE) stocks — the 9
+│   │                     fundamental filters + 8 technical filters that
+│   │                     produce a stock's composite score. This is the
+│   │                     core "is this stock actually good" logic. If a
+│   │                     user disputes a score or a filter's threshold,
+│   │                     this is the file to open. Was audited and
+│   │                     trimmed of ~325 lines of dead code (leftover
+│   │                     Streamlit "Find Best Stock" feature) on
+│   │                     2026-08-29 — see the module docstring for the
+│   │                     audit notes.
+│   ├── factor_engine_us.py  The same checklist methodology, adapted for
+│   │                     US stocks (different fundamentals source: SEC
+│   │                     EDGAR filings instead of NSE filings). Imports
+│   │                     shared helpers from factor_engine.py rather than
+│   │                     duplicating them — keep it that way.
+│   ├── sector_engine.py   Aggregates individual stock scores UP to a
+│   │                     sector level for India (median score per sector,
+│   │                     PE-vs-history trend, etc). Reads from db/, does
+│   │                     not fetch live data itself.
+│   └── sector_valuation.py  Sector-level valuation/momentum sourced from
+│                         real sector ETFs (XLK, XLF, BANKBEES.NS, etc)
+│                         rather than aggregating individual stocks — the
+│                         one genuine cross-market (India + US) read on
+│                         "is this whole sector cheap/expensive and is it
+│                         outperforming right now". Has a NaN guard in
+│                         _pct_return() — read the comment there before
+│                         "simplifying" that check, it's guarding a real
+│                         bug that shipped a 500 once already.
+│
+├── providers/              ── EXTERNAL DATA SOURCE ADAPTERS ──
+│   ├── __init__.py        Empty. Makes this an importable package.
+│   ├── nse_data_provider.py   Fetches India stock prices/fundamentals
+│   │                     (NSE + Yahoo Finance). The India universe list
+│   │                     (Midcap 150 + Smallcap 50) lives here.
+│   ├── us_data_provider.py    Fetches US stock prices (Yahoo Finance)
+│   │                     and fundamentals (SEC EDGAR). The S&P 500
+│   │                     universe list lives here.
+│   ├── live_price_feed.py     Angel One SmartAPI integration — real-time
+│   │                     India quotes when you're logged into a real
+│   │                     Angel One account (ANGEL_* env vars). Falls
+│   │                     back gracefully when those aren't set.
+│   ├── multi_source_data.py   Cross-checks a fundamental figure (like PE)
+│   │                     across multiple sources before trusting it —
+│   │                     the "3-source consensus" logic referenced in
+│   │                     the regression suite.
+│   ├── free_extra_sources.py  Extra free data sources used to fill gaps
+│   │                     the primary providers leave (e.g. BSE scrip
+│   │                     mapping). Uses curl_cffi (browser-impersonating
+│   │                     HTTP client) to get past basic bot detection on
+│   │                     a couple of these sources — that's why
+│   │                     curl_cffi is a real, used dependency and not
+│   │                     dead weight.
+│   ├── nse_xbrl_provider.py   Parses NSE XBRL filing data (structured
+│   │                     financial statements) for a single filing.
+│   └── nse_xbrl_history.py    Walks multiple XBRL filings over time to
+│                         build a history (e.g. YoY profit growth).
+│                         EDIT THIS FOLDER WHEN: a data source changes its
+│                         API/HTML shape, or you're adding a brand new
+│                         data source. Every function here should return
+│                         plain data (dicts/DataFrames/None) — never HTTP
+│                         responses or FastAPI objects. Nothing in here
+│                         should import from routes/.
+│
+├── routes/                 ── HTTP / FASTAPI LAYER ──
+│   ├── __init__.py        Empty. Makes this an importable package.
+│   ├── _util.py            Small shared helpers used by multiple route
+│   │                     files: converting a pandas DataFrame/Series to
+│   │                     plain JSON-safe types, resolving the current
+│   │                     user id. Leading underscore = "not a router
+│   │                     itself, just shared plumbing for the ones that
+│   │                     are".
+│   ├── auth.py             POST /api/auth/register, /api/auth/login.
+│   ├── screener.py         GET /api/screener — the leaderboard tables
+│   │                     behind the India/US Screener pages.
+│   ├── sectors.py          GET /api/sectors — the sector rollup behind
+│   │                     the "Best Sector" tab.
+│   ├── profile.py          GET /api/profile/{ticker} — the single-stock
+│   │                     deep-dive behind the Search Profile page (live
+│   │                     price, full checklist breakdown, suggested
+│   │                     trade levels).
+│   ├── forward_test.py     GET/POST /api/forward-test/... — opening,
+│   │                     closing, and scoring forward-test positions.
+│   └── refresh.py          POST /api/refresh — manually trigger a
+│                         universe data refresh.
+│                         EDIT THIS FOLDER WHEN: adding a new API
+│                         endpoint or changing a request/response shape.
+│                         A route file should stay thin: parse the
+│                         request, call into engine/db/providers, shape
+│                         the response. Real logic belongs in engine/, not
+│                         here.
+│
+├── models/
+│   ├── __init__.py        Empty. Makes this an importable package.
+│   └── schemas.py          Pydantic models for REQUEST bodies only
+│                         (RefreshRequest, TradeOpenRequest, etc). API
+│                         responses are returned as plain dicts built by
+│                         db/engine — deliberately not re-modeled here, to
+│                         keep this a thin wrapper rather than a parallel
+│                         schema to maintain.
+│                         EDIT THIS WHEN: a route needs a new POST/PUT
+│                         request body shape.
+│
+├── tests/
+│   └── e2e_regression.py   The full regression suite — 42 checks covering
+│                         auth, DB schema, screener scoring, buy/sell
+│                         flow, forward-test scorecards, and multi-user
+│                         isolation. Runs against its OWN throwaway SQLite
+│                         file (backend/data/e2e_test_medallion.db), never
+│                         your real dev database.
+│                         RUN THIS WITH (from backend/tests/): python
+│                         e2e_regression.py — expect "42/42 PASSED".
+│                         RUN THIS: after any change to db/, engine/, or
+│                         routes/, before you consider the change done.
+│
+└── data/                   ── RUNTIME DATA (NOT SOURCE CODE) ──
+    Not committed to git (see .gitignore — *.db, medallion_system.db).
+    Created/populated automatically the first time you run the backend
+    or the regression suite. Safe to delete at any time; everything in
+    here regenerates itself (the .db file rebuilds its schema on next
+    startup; the .json caches refill on next data fetch).
+      medallion_system.db      Your local SQLite database (users,
+                                leaderboard cache, open/closed trades).
+                                In production this is replaced by Turso
+                                (see TURSO_* in .env.example) because
+                                Render's free tier has no persistent disk.
+      e2e_test_medallion.db    Regression suite's own throwaway database.
+      bse_scrip_map.json       Cached BSE ticker mapping.
+      nse_universe.txt         Cached India universe ticker list.
+      us_universe_cache.json   Cached US (S&P 500) universe ticker list.
+      us_cik_map_cache.json    Cached SEC EDGAR ticker-to-CIK mapping.
+
+
+================================================================================
+FRONTEND/  (TypeScript, React, Vite)
+================================================================================
+
+frontend/
+├── index.html             The single real HTML page (a Vite SPA shell —
+│                         React renders everything into it). You will
+│                         almost never need to touch this directly.
+├── package.json           Dependencies + npm scripts (dev/build/lint/
+│                         preview). EDIT THIS WHEN you add a new npm
+│                         package — always via `npm install <pkg>`, don't
+│                         hand-edit the version numbers.
+├── vite.config.ts         Dev server config. Notably: proxies /api and
+│                         /health to http://127.0.0.1:8000 so the React
+│                         app can call relative paths like /api/screener
+│                         in development without a CORS dance — the
+│                         backend must be running on port 8000 for this
+│                         to work locally.
+├── tsconfig.json / tsconfig.app.json / tsconfig.node.json
+│                         TypeScript compiler configuration. Rarely
+│                         touched by hand.
+├── .oxlintrc.json         Linter config (`npm run lint`).
+│
+├── public/                 Static files served AS-IS at the site root,
+│   ├── favicon.svg        untouched by the build. Anything here is
+│   ├── icons.svg          reachable at e.g. yoursite.com/favicon.svg.
+│   └── _redirects          IMPORTANT: this is what makes client-side
+│                         routing work when deployed (Cloudflare Pages).
+│                         Without it, refreshing the browser on e.g.
+│                         /forward-test would 404, because that path
+│                         doesn't exist as a real file — only React
+│                         Router knows about it. Do not delete this.
+│
+├── src/
+│   ├── main.tsx            React entry point — mounts <App /> into
+│   │                     index.html. Rarely touched.
+│   ├── App.tsx              Top-level router. Defines every URL route
+│   │                     (/login, /screener/in, /screener/us, /profile,
+│   │                     /forward-test) and which page component renders
+│   │                     for each. Also wraps logged-in-only pages in a
+│   │                     Protected guard that redirects to /login if
+│   │                     there's no active session.
+│   │                     EDIT THIS WHEN: adding a brand new page/route.
+│   ├── App.css / index.css Global styles.
+│   │
+│   ├── pages/               ── ONE FILE PER SCREEN ──
+│   │   ├── Login.tsx          Sign in / create account screen.
+│   │   ├── ScreenerIndia.tsx  India Screener — the leaderboard + Best
+│   │   │                     Sector tabs for NSE stocks.
+│   │   ├── ScreenerUS.tsx     Same, for US (S&P 500) stocks.
+│   │   ├── SearchProfile.tsx  Single-ticker deep dive: live price,
+│   │   │                     full checklist breakdown, buy/trade panel.
+│   │   └── ForwardTest.tsx    Forward-test scorecards (India + US) and
+│   │                         the open/closed signal history.
+│   │                         EDIT THIS FOLDER WHEN: changing what a
+│   │                         specific screen shows or does. A page file
+│   │                         should compose components/ + call api/
+│   │                         client.ts — avoid putting reusable widgets
+│   │                         directly in a page file.
+│   │
+│   ├── components/          ── REUSABLE UI PIECES (used by 2+ pages, or
+│   │   │                       complex enough to isolate) ──
+│   │   ├── Nav.tsx              Top navigation bar (the 4 page links +
+│   │   │                       the command palette trigger + user menu).
+│   │   ├── CommandPalette.tsx   The Ctrl+K "jump to" quick-search overlay.
+│   │   ├── UserProfileMenu.tsx  The account menu in the top-right corner.
+│   │   ├── ChecklistTable.tsx   Renders a stock's fundamental/technical
+│   │   │                       filter results as a pass/fail table.
+│   │   ├── ChecklistExplainer.tsx  The expandable "what does this filter
+│   │   │                       mean" panels (reads from src/data/).
+│   │   ├── SectorValuationTable.tsx  Renders the sector ETF valuation/
+│   │   │                       momentum table on the Best Sector tab.
+│   │   ├── TrendBadge.tsx       Small colored pill showing price vs
+│   │   │                       200SMA / alpha, used in leaderboard rows.
+│   │   ├── Pill.tsx             Generic small colored label component
+│   │   │                       (BUYABLE, CACHED, data-quality tags, etc).
+│   │   ├── CountUp.tsx          Small animated-number component (used
+│   │   │                       for the headline stat counters).
+│   │   ├── Starfield.tsx        Decorative animated background.
+│   │   └── MedallionLogo.tsx    The logo mark component.
+│   │                         EDIT THIS FOLDER WHEN: building a piece of
+│   │                         UI more than one page needs, or pulling a
+│   │                         page file back down to a readable size.
+│   │
+│   ├── api/
+│   │   └── client.ts          THE ONLY FILE THAT SHOULD CALL fetch()
+│   │                         AGAINST THE BACKEND. Every page/component
+│   │                         goes through here rather than calling fetch
+│   │                         directly, so there's exactly one place that
+│   │                         knows the API base URL (VITE_API_BASE_URL
+│   │                         env var in production, empty/relative in
+│   │                         dev where the Vite proxy handles it) and
+│   │                         one place to add e.g. auth headers later.
+│   │                         EDIT THIS WHEN: adding a call to a new
+│   │                         backend endpoint.
+│   │
+│   ├── context/
+│   │   └── AuthContext.tsx    Holds the logged-in user id/username in
+│   │                         React context + localStorage (so a refresh
+│   │                         doesn't log you out). NOTE: updateProfile()
+│   │                         here is currently LOCAL-ONLY (localStorage),
+│   │                         because there is no PATCH /api/profile
+│   │                         endpoint yet — see the comment in the file.
+│   │                         Don't assume profile edits are actually
+│   │                         persisted server-side until that's built.
+│   │
+│   ├── hooks/
+│   │   └── useSort.ts         Generic reusable "click a column header to
+│   │                         sort this table" hook — used by the
+│   │                         screener leaderboard tables.
+│   │
+│   ├── data/
+│   │   ├── checklistExplainers.ts     Static text: what each India
+│   │   │                             fundamental/technical filter means
+│   │   │                             and why (feeds ChecklistExplainer).
+│   │   └── checklistExplainersUS.ts   Same, for the US checklist.
+│   │                         EDIT THIS WHEN: the wording of a filter
+│   │                         explanation needs to change, or a filter is
+│   │                         added/removed in factor_engine.py /
+│   │                         factor_engine_us.py and the explainer text
+│   │                         needs to match.
+│   │
+│   ├── types.ts               Shared TypeScript types for API response
+│   │                         shapes. Keep in sync with what the backend
+│   │                         routes actually return.
+│   │
+│   └── assets/                Images bundled into the JS build (logo
+│                             variants, favicon source). Different from
+│                             public/ — these get processed/hashed by
+│                             Vite; public/ files are copied verbatim.
+│
+└── dist/                    ── BUILD OUTPUT — NOT SOURCE, NOT COMMITTED ──
+    Generated by `npm run build`. Deleting this folder is always safe;
+    it's regenerated from src/ on the next build. This is what actually
+    gets deployed to Cloudflare Pages / any static host.
+
+
+================================================================================
+"WHERE DO I...?" — QUICK TASK INDEX
+================================================================================
+
+  Change a scoring rule / filter threshold (India)
+      -> backend/engine/factor_engine.py
+
+  Change a scoring rule / filter threshold (US)
+      -> backend/engine/factor_engine_us.py
+
+  Fix "this stock's price/fundamental data looks wrong"
+      -> backend/providers/nse_data_provider.py (India)
+      -> backend/providers/us_data_provider.py (US)
+
+  Add a new database table or column
+      -> backend/db/database_engine.py
+
+  Add a new API endpoint
+      -> new function in the right file under backend/routes/
+      -> if it needs a request body, add the shape to backend/models/schemas.py
+      -> if it's a whole new area, register the router in backend/main.py
+
+  Add a call to an existing/new backend endpoint from the UI
+      -> backend/frontend/src/api/client.ts
+
+  Change what a specific page looks like or does
+      -> frontend/src/pages/<PageName>.tsx
+
+  Change the top nav, command palette, or a widget used on 2+ pages
+      -> frontend/src/components/
+
+  Change the "what does this filter mean" explainer text
+      -> frontend/src/data/checklistExplainers.ts (or ...US.ts)
+
+  Add an environment variable / secret
+      -> add it to backend/.env.example (documented, no real value)
+      -> add the REAL value only to your local backend/.env (never
+         committed) or to the hosting platform's secrets manager
+
+  Run the backend locally
+      -> cd backend, activate the venv, `pip install -r requirements.txt`,
+         `uvicorn main:app --reload --port 8000`
+
+  Run the frontend locally
+      -> cd frontend, `npm install`, `npm run dev` (proxies /api to the
+         backend on port 8000 — start the backend first)
+
+  Run the full regression suite
+      -> cd backend/tests, `python e2e_regression.py` — expect 42/42 PASSED
+
+  Deploy
+      -> see DEPLOYMENT section below and README.md
+
+
+================================================================================
+WHAT'S DELIBERATELY NOT IN GIT  (see .gitignore)
+================================================================================
+
+  backend/venv/ or any venv/           Python virtual environment — huge,
+                                        machine-specific. Recreate with
+                                        `python -m venv venv`.
+  backend/.env                         Real secrets. Copy from .env.example
+                                        and fill in.
+  backend/data/*.db, *.sqlite          Local databases — regenerate
+                                        automatically on first run.
+  backend/*.log, *_log.txt             Server/run logs.
+  frontend/node_modules/               npm packages — huge, machine-
+                                        specific. Recreate with `npm install`.
+  frontend/dist/                       Build output — regenerate with
+                                        `npm run build`.
+  __pycache__/, *.pyc                  Python bytecode cache.
+
+  If you ever see a real API key, password, or token in a file that IS
+  tracked by git, treat it as a live incident: rotate the credential
+  immediately and scrub it from git history before pushing — don't just
+  edit the file going forward. This has happened once before in this
+  repo's history (an old .streamlit/secrets.toml.example commit); that
+  file no longer exists (Streamlit UI was retired in the FastAPI/React
+  rebuild), but the lesson stands for backend/.env.example: it must only
+  ever contain empty placeholders.
+
+
+================================================================================
+DEPLOYMENT (brief — see README.md for full steps)
+================================================================================
+
+  Backend  -> Render.com, using render.yaml (rootDir: backend, runs
+              `uvicorn main:app --host 0.0.0.0 --port $PORT`). Free tier
+              has no persistent disk, so production data lives in Turso
+              (hosted libSQL) instead of a local SQLite file — set
+              TURSO_DATABASE_URL / TURSO_AUTH_TOKEN in Render's
+              environment settings, not in any committed file.
+
+  Frontend -> Any static host (Cloudflare Pages, etc). Build with
+              `npm run build` inside frontend/, deploy the resulting
+              frontend/dist/ folder. Set VITE_API_BASE_URL at build time
+              to the deployed backend's URL. The frontend/public/_redirects
+              file must ship with the build for client-side routing to
+              survive a page refresh.

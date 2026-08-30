@@ -39,7 +39,9 @@ import pandas as pd
 
 logger = logging.getLogger(__name__)
 
-BASE_DIR = Path(__file__).resolve().parent
+# This file lives in backend/providers/ — cache files live in backend/data/,
+# one level up.
+BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = BASE_DIR / "data"
 UNIVERSE_CACHE_PATH = DATA_DIR / "us_universe_cache.json"
 CIK_MAP_CACHE_PATH = DATA_DIR / "us_cik_map_cache.json"
@@ -446,7 +448,7 @@ def build_live_row(ticker: str, bench_frame: Optional[pd.DataFrame] = None) -> O
     if frame is None or frame.empty:
         return None
 
-    import nse_data_provider as ndp
+    from providers import nse_data_provider as ndp
 
     tech = ndp.compute_technicals(frame, bench_frame)
     rel_vol = _relative_volume(frame)
@@ -530,7 +532,7 @@ def refresh_universe(tickers: Optional[List[str]] = None, max_workers: int = 8) 
     import time as _time
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
-    import factor_engine_us as feus
+    from engine import factor_engine_us as feus
 
     t0 = _time.time()
     symbols = tickers or [u["ticker"] for u in load_universe()]

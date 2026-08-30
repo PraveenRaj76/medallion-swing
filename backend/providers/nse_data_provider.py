@@ -27,7 +27,9 @@ import pandas as pd
 
 logger = logging.getLogger(__name__)
 
-BASE_DIR = Path(__file__).resolve().parent
+# This file lives in backend/providers/ — cache files live in backend/data/,
+# one level up.
+BASE_DIR = Path(__file__).resolve().parent.parent
 UNIVERSE_PATH = BASE_DIR / "data" / "nse_universe.txt"
 BENCHMARK = "^NSEI"
 RSI_OVERBOUGHT = 65.0
@@ -428,7 +430,7 @@ def compute_technicals(
     delivery_pct: Optional[float] = None
     if ticker:
         try:
-            import free_extra_sources as _extra
+            from providers import free_extra_sources as _extra
 
             delivery_pct = _extra.fetch_nse_delivery_pct_10d(ticker)
         except Exception as exc:
@@ -576,7 +578,7 @@ def fetch_fundamentals_screener(ticker: str) -> Dict[str, Any]:
 
 def _score_fundamental(row: Dict[str, Any]) -> float:
     try:
-        import factor_engine as fe
+        from engine import factor_engine as fe
 
         return float(fe.evaluate_fundamental_checklist(row)["total_marks"])
     except Exception:
@@ -585,7 +587,7 @@ def _score_fundamental(row: Dict[str, Any]) -> float:
 
 def _score_technical(row: Dict[str, Any]) -> float:
     try:
-        import factor_engine as fe
+        from engine import factor_engine as fe
 
         return float(fe.evaluate_technical_checklist(row)["total_marks"])
     except Exception:
@@ -637,7 +639,7 @@ def _fetch_fundamentals_safe(ticker: str, prior: Optional[Dict[str, Any]] = None
         cached["fundamentals_report"] = prior.get("fundamentals_report")
         return cached
     try:
-        import multi_source_data as msd
+        from providers import multi_source_data as msd
 
         return msd.fetch_verified_fundamentals(ticker)
     except Exception as exc:
@@ -676,7 +678,7 @@ def build_live_row(
             px = float(fund["close_price"])
         else:
             try:
-                import live_price_feed as lpf
+                from providers import live_price_feed as lpf
 
                 q = lpf.fetch_live_quote(ticker)
                 if q.get("ok"):
@@ -692,7 +694,7 @@ def build_live_row(
         # than falling straight to a carried-forward/fabricated number.
         delivery_pct_fallback: Optional[float] = None
         try:
-            import free_extra_sources as _extra
+            from providers import free_extra_sources as _extra
 
             delivery_pct_fallback = _extra.fetch_nse_delivery_pct_10d(ticker)
         except Exception as exc:

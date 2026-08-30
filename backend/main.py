@@ -11,21 +11,57 @@ from __future__ import annotations
 import logging
 import os
 
+import math
+from typing import Any
+
 from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 load_dotenv()
 
 logging.basicConfig(level=os.environ.get("MEDALLION_LOG_LEVEL", "INFO"))
 logger = logging.getLogger("medallion.api")
 
-import database_engine as db  # noqa: E402  (after load_dotenv/logging setup)
+from db import database_engine as db  # noqa: E402  (after load_dotenv/logging setup)
+
+
+def _sanitize_nan(obj: Any) -> Any:
+    """NaN/Infinity have no JSON representation — Starlette's default
+    JSONResponse correctly refuses them (allow_nan=False) rather than
+    emitting non-standard tokens a browser's JSON.parse would choke on. But
+    "correctly refuses" means a 500 for the whole request the moment a NaN
+    reaches here, however it got there — found via a live /api/sectors crash
+    traced to a NaN closing price in a fetched OHLCV series (real gap-day
+    data, not a code bug in the usual sense) slipping past a `is not None`
+    check that doesn't catch NaN (float('nan') is not None → True). Fixed
+    that specific source (sector_valuation.py), but the same shape of bug —
+    a live-data NaN reaching a numeric field nothing downstream expected to
+    need a NaN check — can occur anywhere real market data flows through a
+    calculation. This is the backstop: convert to JSON's actual equivalent
+    of "no value" (null) here, once, rather than requiring every call site
+    that touches live data to individually remember to guard for it.
+    """
+    if isinstance(obj, float):
+        return None if (math.isnan(obj) or math.isinf(obj)) else obj
+    if isinstance(obj, dict):
+        return {k: _sanitize_nan(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_sanitize_nan(v) for v in obj]
+    return obj
+
+
+class SafeJSONResponse(JSONResponse):
+    def render(self, content: Any) -> bytes:
+        return super().render(_sanitize_nan(content))
+
 
 app = FastAPI(
     title="Medallion Swing Engine",
     description="Quantamental swing-trading validator for NSE equities",
     version="2.0.0",
+    default_response_class=SafeJSONResponse,
 )
 
 # Extra production origins (e.g. the Cloudflare Pages deployment URL) come
