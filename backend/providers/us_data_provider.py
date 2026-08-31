@@ -516,6 +516,9 @@ def build_live_row(ticker: str, bench_frame: Optional[pd.DataFrame] = None) -> O
         "price_kind": "LAST",
         "week52_high": round(float(frame["high"].tail(252).max()), 2),
         "week52_low": round(float(frame["low"].tail(252).min()), 2),
+        # See nse_data_provider.price_freshness() — tech["price_as_of"]
+        # already carries the real bar date close_price was computed from.
+        "price_as_of": tech.get("price_as_of") or ndp._last_bar_date(frame),
         "day_open": round(float(frame["open"].iloc[-1]), 2),
         "day_high": round(float(frame["high"].iloc[-1]), 2),
         "day_low": round(float(frame["low"].iloc[-1]), 2),

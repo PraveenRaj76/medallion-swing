@@ -1627,6 +1627,23 @@ td.ticker {
   margin-top: 4px;
   font-family: 'JetBrains Mono', monospace;
 }
+.quote-stale-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  padding: 5px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--warn-dim);
+  color: var(--warn);
+  font-size: 11.5px;
+  font-weight: 600;
+  font-family: 'JetBrains Mono', monospace;
+}
+.quote-stale-badge::before {
+  content: '⚠';
+  font-size: 12px;
+}
 .quote-stats {
   display: grid;
   grid-template-columns: repeat(5, 1fr);

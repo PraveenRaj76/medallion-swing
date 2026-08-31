@@ -21,6 +21,8 @@
   --gain-dim: rgba(111, 207, 151, 0.12);
   --loss: #e8827a;
   --loss-dim: rgba(232, 130, 122, 0.12);
+  --warn: #e0a83d;
+  --warn-dim: rgba(224, 168, 61, 0.14);
   --info: #7fb3e8;
   --info-dim: rgba(127, 179, 232, 0.12);
   --radius-sm: 10px;

@@ -496,6 +496,107 @@ check(
 with db_mod.get_connection() as _conn:
     _conn.cursor().execute("DELETE FROM users WHERE user_id = ?", (SCRATCH_UID,))
 
+print("\n=== 16. Price freshness / recheck logic ===")
+import datetime as _dt
+
+_today = _dt.date.today()
+_fresh_str = _today.strftime("%Y-%m-%d")
+_one_day_str = (_today - _dt.timedelta(days=1)).strftime("%Y-%m-%d")
+_five_days_str = (_today - _dt.timedelta(days=5)).strftime("%Y-%m-%d")
+
+fresh = nse.price_freshness(_fresh_str)
+check("Today's bar date is never flagged stale", fresh["is_stale"] is False and fresh["days_stale"] == 0, f"fresh={fresh}")
+
+one_day = nse.price_freshness(_one_day_str)
+check(
+    "1 day old (e.g. checked Saturday for Friday's close) is NOT flagged stale — routine, not a real gap",
+    one_day["is_stale"] is False and one_day["days_stale"] == 1,
+    f"one_day={one_day}",
+)
+
+five_days = nse.price_freshness(_five_days_str)
+check(
+    "5 days old IS flagged stale — beyond a normal weekend gap",
+    five_days["is_stale"] is True and five_days["days_stale"] == 5,
+    f"five_days={five_days}",
+)
+
+missing = nse.price_freshness(None)
+check(
+    "Missing price_as_of returns is_stale=None (unknown), not a false 'fresh' or false 'stale'",
+    missing["is_stale"] is None and missing["days_stale"] is None,
+    f"missing={missing}",
+)
+
+garbage = nse.price_freshness("not-a-date")
+check(
+    "Garbage/unparseable date degrades to unknown, doesn't crash or silently claim fresh",
+    garbage["is_stale"] is None,
+    f"garbage={garbage}",
+)
+
+# Reproduces the exact real case this feature was built for: yfinance's
+# most recent bar has a real Date but NaN OHLC (see _clean_ohlcv), so the
+# frame's real last row is one session behind "today".
+lagged_frame = pd.DataFrame(
+    {
+        "open": [100.0, 101.0],
+        "high": [101.0, 102.0],
+        "low": [99.0, 100.0],
+        "close": [100.5, 101.5],
+        "volume": [1000, 1100],
+    },
+    index=pd.to_datetime([_one_day_str, _fresh_str]),
+)
+broken_today = pd.DataFrame(
+    {
+        "open": [100.0, 101.0, float("nan")],
+        "high": [101.0, 102.0, float("nan")],
+        "low": [99.0, 100.0, float("nan")],
+        "close": [100.5, 101.5, float("nan")],
+        "volume": [1000, 1100, 1200],
+    },
+    index=pd.to_datetime([(_today - _dt.timedelta(days=2)).strftime("%Y-%m-%d"), _one_day_str, _fresh_str]),
+)
+cleaned_lagged = nse._clean_ohlcv(broken_today)
+tech = nse.compute_technicals(cleaned_lagged)
+lag_freshness = nse.price_freshness(tech.get("price_as_of"))
+check(
+    "End-to-end: a broken today's bar correctly surfaces as 1-day-stale via compute_technicals -> price_freshness",
+    tech["price_as_of"] == _one_day_str and lag_freshness["is_stale"] is False and lag_freshness["days_stale"] == 1,
+    f"tech.price_as_of={tech.get('price_as_of')}, freshness={lag_freshness}",
+)
+
+# Real bug found live while verifying this feature: _parse_chart_payload
+# (India's PRIMARY OHLCV path, tried before the yfinance fallback) stores
+# the real date in a "date" COLUMN and resets the index to a plain
+# 0..N RangeIndex — so frame.index[-1] returns a row COUNT, not a date.
+# This made price_as_of come back as "250" for RELIANCE and, silently,
+# every other India ticker resolved through that path (masked in that one
+# response only because a live Angel-One tick was also present and takes
+# precedence — see routes/profile.py's _build_quote).
+date_column_frame = pd.DataFrame(
+    {
+        "date": pd.to_datetime([_one_day_str, _fresh_str]),
+        "open": [100.0, 101.0],
+        "high": [101.0, 102.0],
+        "low": [99.0, 100.0],
+        "close": [100.5, 101.5],
+        "volume": [1000, 1100],
+    }
+)
+check(
+    "_last_bar_date reads the 'date' COLUMN when present, not the reset RangeIndex",
+    nse._last_bar_date(date_column_frame) == _fresh_str,
+    f"got {nse._last_bar_date(date_column_frame)!r} (bug would return a row count like '1')",
+)
+date_col_tech = nse.compute_technicals(date_column_frame)
+check(
+    "compute_technicals on a 'date'-column frame (India's real primary-path shape) never returns a garbage price_as_of",
+    date_col_tech["price_as_of"] == _fresh_str,
+    f"price_as_of={date_col_tech.get('price_as_of')!r}",
+)
+
 print("\n" + "=" * 60)
 print(f"STRESS TEST SUMMARY: {PASS}/{PASS + FAIL} PASSED | {FAIL} FAILED")
 if FINDINGS:

@@ -345,6 +345,58 @@ def _clean_ohlcv(frame: pd.DataFrame) -> pd.DataFrame:
     return frame[frame["close"].notna()]
 
 
+def _last_bar_date(frame: pd.DataFrame) -> Optional[str]:
+    """The real calendar date of an OHLCV frame's most recent row, as
+    "YYYY-MM-DD" — for price_freshness() below.
+
+    NOT simply str(frame.index[-1])[:10]: this codebase's two OHLCV
+    sources shape their frames differently. _parse_chart_payload (India's
+    PRIMARY path, tried before the yfinance fallback) puts the real date
+    in a "date" COLUMN and then does reset_index(drop=True) — so its
+    index is a plain 0..N RangeIndex, not dates. Found live: this made
+    price_as_of come back as "250" (a row count, not a date) for every
+    India ticker resolved through that path — RELIANCE among them.
+    _fetch_ohlcv_yfinance / us_data_provider.fetch_ohlcv (yfinance's own
+    .history()) DO return a real DatetimeIndex, which is where the
+    index[-1] fallback below is still correct.
+    """
+    if frame is None or frame.empty:
+        return None
+    try:
+        if "date" in frame.columns:
+            return str(frame["date"].iloc[-1])[:10]
+        return str(frame.index[-1])[:10]
+    except (IndexError, KeyError):
+        return None
+
+
+def price_freshness(price_as_of: Optional[str]) -> Dict[str, Any]:
+    """Reconfirms a displayed price actually IS what "live" implies, instead
+    of asking the user to just trust the label. Compares the bar date the
+    price/technicals were really computed from (see _clean_ohlcv above —
+    this can genuinely be a day or more behind "now" when the freshest bar
+    came back broken) against today's date.
+
+    days_stale=0/1 covers same-day and the routine "checked before this
+    market's next session opened" case; >1 is flagged since NSE/NASDAQ
+    both trade Mon-Fri, so a normal weekend check-in (Sat/Sun looking at
+    Friday's close) lands at exactly 1-2 days depending on which day you
+    check, and a >3 day gap without a matching multi-day holiday is real
+    staleness worth surfacing, not routine. Not holiday-calendar-aware —
+    deliberately conservative (a holiday can occasionally show a false
+    "stale" flag; that's a cheap price for never silently hiding a real
+    multi-day-stale price behind a "LIVE" label).
+    """
+    if not price_as_of:
+        return {"price_as_of": None, "days_stale": None, "is_stale": None}
+    try:
+        bar_date = datetime.strptime(str(price_as_of)[:10], "%Y-%m-%d").date()
+        days = (datetime.now().date() - bar_date).days
+        return {"price_as_of": str(price_as_of)[:10], "days_stale": days, "is_stale": days > 3}
+    except (ValueError, TypeError):
+        return {"price_as_of": None, "days_stale": None, "is_stale": None}
+
+
 def fetch_ohlcv(ticker: str, range_param: str = "1y", interval: str = "1d") -> pd.DataFrame:
     """Fetch NSE daily bars: Yahoo chart HTTP → yfinance → empty (caller may multi-source CMP)."""
     hosts = (
@@ -472,6 +524,9 @@ def compute_technicals(
         "delivery_pct_10d": delivery_pct,
         "week52_high": round(float(frame["high"].tail(252).max()), 2),
         "week52_low": round(float(frame["low"].tail(252).min()), 2),
+        # See price_freshness() above — the actual bar close_price came
+        # from, which _clean_ohlcv already guarantees is a real close.
+        "price_as_of": _last_bar_date(frame),
     }
 
 
@@ -841,6 +896,7 @@ def build_live_row(
         row["day_low"] = round(float(hist["low"].iloc[-1]), 2)
         row["day_volume"] = float(hist["volume"].iloc[-1]) if "volume" in hist.columns else None
         row["prev_close"] = round(float(hist["close"].iloc[-2]), 2) if len(hist) >= 2 else None
+        row["price_as_of"] = _last_bar_date(hist)
     else:
         row["week52_high"] = None
         row["week52_low"] = None
@@ -849,6 +905,7 @@ def build_live_row(
         row["day_low"] = None
         row["day_volume"] = None
         row["prev_close"] = None
+        row["price_as_of"] = None
     for key in (
         "roic",
         "roe",
