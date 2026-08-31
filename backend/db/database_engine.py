@@ -656,6 +656,11 @@ def _ensure_active_positions_extra_columns(cursor: sqlite3.Cursor) -> None:
         # Every position opened before Search Profile could open US trades
         # was necessarily India — default keeps those rows correctly labeled.
         "market": "TEXT DEFAULT 'IN'",
+        # Sector at entry time — lets evaluate_buy_signal's sector_concentration
+        # gate count same-sector exposure across a user's open positions.
+        # NULL for any position opened before this migration; those rows
+        # simply never match a sector-concentration check (see open_signal).
+        "sector": "TEXT",
     }
     for name, decl in additions.items():
         if name not in cols:
@@ -1384,7 +1389,7 @@ def get_active_positions(user_id: int, market: Optional[str] = None) -> pd.DataF
                 SELECT position_id, user_id, ticker, entry_timestamp, entry_price,
                        stop_loss, target, quantity, current_price, unrealized_pnl,
                        atr_at_entry, initial_stop_loss, highest_price_since_entry, trail_phase,
-                       COALESCE(market, 'IN') AS market
+                       COALESCE(market, 'IN') AS market, sector
                 FROM active_positions
                 WHERE user_id = ?
             """
@@ -1429,6 +1434,7 @@ def open_signal(
     target: float,
     atr: Optional[float] = None,
     market: str = "IN",
+    sector: Optional[str] = None,
 ) -> Tuple[bool, str]:
     """Open a forward-test signal at fixed Quantity = 1. Capital is irrelevant.
 
@@ -1437,6 +1443,10 @@ def open_signal(
     data_pipeline.compute_trailing_stop(). Optional and defaults to None for
     callers that predate the trailing-stop redesign; those positions simply
     keep their fixed initial stop (no ratcheting) until re-opened with an ATR.
+
+    ``sector`` is stored so evaluate_buy_signal's sector_concentration gate
+    can count same-sector exposure across open positions; optional, same
+    "old rows just don't match" reasoning as atr above.
     """
     market = (market or "IN").upper()
     currency = "₹" if market == "IN" else "$"
@@ -1459,8 +1469,8 @@ def open_signal(
                 INSERT INTO active_positions (
                     user_id, ticker, entry_timestamp, entry_price, stop_loss, target,
                     quantity, current_price, unrealized_pnl,
-                    atr_at_entry, initial_stop_loss, highest_price_since_entry, trail_phase, market
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0.0, ?, ?, ?, 'initial', ?)
+                    atr_at_entry, initial_stop_loss, highest_price_since_entry, trail_phase, market, sector
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0.0, ?, ?, ?, 'initial', ?, ?)
                 """,
                 (
                     user_id,
@@ -1475,6 +1485,7 @@ def open_signal(
                     float(stop_loss),
                     float(entry_price),
                     market,
+                    str(sector) if sector else None,
                 ),
             )
         return True, f"Tracked 1 share of {ticker.upper()} @ {currency}{entry_price:.2f}."

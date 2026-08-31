@@ -358,6 +358,144 @@ check(
     f"got {cleaned['close'].iloc[-1]}",
 )
 
+print("\n=== 13. Sector-relative quality thresholds (Greenblatt gap #3) ===")
+## 16% sits between the two packs' top-tier bars (cyclicals >=15, quality
+## >=20) so it's full marks for one and only partial for the other — a
+## value below both bars (e.g. 13%) would score "solid" 7/10 either way
+## and wouldn't actually demonstrate the relaxation.
+cyclical_row = {"sector": "Metals & Mining", "roic": 16.0, "data_quality": "SOURCED"}
+quality_row = {"sector": "Information Technology", "roic": 16.0, "data_quality": "SOURCED"}
+cyclical_item = next(i for i in fe.evaluate_fundamental_checklist(cyclical_row)["items"] if "ROCE" in i["name"] or "ROIC" in i["name"])
+quality_item = next(i for i in fe.evaluate_fundamental_checklist(quality_row)["items"] if "ROCE" in i["name"] or "ROIC" in i["name"])
+check(
+    "Same 16% ROIC scores full marks for a cyclical but not for a quality-pack stock",
+    cyclical_item["marks"] == 10.0 and quality_item["marks"] < 10.0,
+    f"cyclical={cyclical_item}, quality={quality_item}",
+)
+
+us_cyclical_row = {"sector": "Energy", "industry": "Oil & Gas", "roic": 16.0, "data_quality": "SOURCED"}
+us_quality_row = {"sector": "Information Technology", "roic": 16.0, "data_quality": "SOURCED"}
+us_cyc_item = next(i for i in feus.evaluate_us_fundamental_checklist(us_cyclical_row)["items"] if "ROE" in i["name"])
+us_qual_item = next(i for i in feus.evaluate_us_fundamental_checklist(us_quality_row)["items"] if "ROE" in i["name"])
+check(
+    "US checklist applies the same cyclicals relaxation as India (previously US had no cyclicals pack at all)",
+    us_cyc_item["marks"] == 10.0 and us_qual_item["marks"] < 10.0,
+    f"us_cyclical={us_cyc_item}, us_quality={us_qual_item}",
+)
+
+debt_cyclical_row = {"sector": "Metals & Mining", "net_debt_ebitda": 2.5, "data_quality": "SOURCED"}
+debt_item = next(i for i in fe.evaluate_fundamental_checklist(debt_cyclical_row)["items"] if i["name"] == "Net Debt / EBITDA")
+check(
+    "Debt thresholds stay sector-blind on purpose — 2.5x is still only 'elevated', not relaxed for cyclicals",
+    debt_item["marks"] == 2.0,
+    f"item={debt_item}",
+)
+
+print("\n=== 14. US relative-valuation parity (gap #4) ===")
+us_row_with_peer = {"data_quality": "SOURCED", "sector": "Information Technology", "peg_ratio": 3.0, "pe_peer_percentile": 15.0}
+us_card = feus.evaluate_us_fundamental_checklist(us_row_with_peer)
+peer_item = next((i for i in us_card["items"] if i["name"] == "PE vs sector peers"), None)
+check(
+    "US fundamental checklist now scores 'PE vs sector peers' when the field is present (previously India-only)",
+    peer_item is not None and peer_item["marks"] == 4.0,
+    f"item={peer_item}",
+)
+us_row_no_peer = {"data_quality": "SOURCED", "sector": "Information Technology", "peg_ratio": 3.0}
+no_peer_card = feus.evaluate_us_fundamental_checklist(us_row_no_peer)
+check(
+    "Item is absent (not scored zero) when pe_peer_percentile hasn't been computed yet",
+    not any(i["name"] == "PE vs sector peers" for i in no_peer_card["items"]),
+)
+
+us_gate_row = {
+    "ticker": "USTEST", "data_quality": "SOURCED", "close_price": 100.0, "sma_200": 90.0,
+    "rsi_14": 50.0, "pe_peer_percentile": 15.0, "peg_ratio": 3.0,  # PEG alone would fail BUY_PEG_MAX
+}
+us_gate_scorecard = {"composite_pct": 80.0, "fundamental": {"pct": 80.0}}
+us_signal = pipe.evaluate_buy_signal(us_gate_row, us_gate_scorecard, user_id=999999, market="US")
+us_val_gate = next(g for g in us_signal["gates"] if g["gate"] == "relative_valuation")
+check(
+    "US BUY gate passes on peer percentile even when PEG alone would fail — parity with India, not PEG-only",
+    us_val_gate["passed"] is True,
+    f"gate={us_val_gate}",
+)
+
+print("\n=== 15. Sector-concentration cap (gap #5, portfolio risk) ===")
+db_mod = importlib.import_module("db.database_engine") if "db_mod" not in dir() else db_mod
+
+# active_positions.user_id has a real FOREIGN KEY against users(user_id) —
+# an invented ID like the market-regime section's scratch 999999 works
+# there because that section only ever READS get_active_positions (empty
+# result for a nonexistent user, no FK involved); this section INSERTS via
+# open_signal, which enforces the constraint. Needs a real registered user.
+SCRATCH_USERNAME = "zzstresstest_sector_cap"
+with db_mod.get_connection() as _conn:
+    _conn.cursor().execute("DELETE FROM users WHERE username = ?", (SCRATCH_USERNAME,))
+_reg_ok, _reg_msg, SCRATCH_UID = db_mod.register_user(SCRATCH_USERNAME, "scratch123")
+check("Scratch test user created for sector-cap test setup", _reg_ok and SCRATCH_UID is not None, _reg_msg)
+_opened_ids = []
+for i, tkr in enumerate(["ZZTEST1", "ZZTEST2"]):
+    ok, msg = db_mod.open_signal(
+        user_id=SCRATCH_UID, ticker=tkr, entry_price=100.0, stop_loss=90.0, target=130.0,
+        atr=5.0, market="IN", sector="Metals & Mining",
+    )
+    check(f"Scratch position {tkr} opened for sector-cap test setup", ok, msg)
+    active_now = db_mod.get_active_positions(SCRATCH_UID)
+    row_match = active_now[active_now["ticker"] == tkr]
+    if not row_match.empty:
+        _opened_ids.append(int(row_match.iloc[0]["position_id"]))
+
+same_sector_row = {
+    "ticker": "ZZTEST3", "sector": "Metals & Mining", "data_quality": "SOURCED",
+    "close_price": 100.0, "sma_200": 90.0, "rsi_14": 50.0, "peg_ratio": 0.8,
+}
+diff_sector_row = {
+    "ticker": "ZZTEST4", "sector": "Information Technology", "data_quality": "SOURCED",
+    "close_price": 100.0, "sma_200": 90.0, "rsi_14": 50.0, "peg_ratio": 0.8,
+}
+scratch_scorecard = {"composite_pct": 80.0, "fundamental": {"pct": 80.0}}
+
+signal_same = pipe.evaluate_buy_signal(same_sector_row, scratch_scorecard, user_id=SCRATCH_UID, market="IN")
+gate_same = next(g for g in signal_same["gates"] if g["gate"] == "sector_concentration")
+check(
+    f"2 open Metals & Mining positions ({pipe.MAX_POSITIONS_PER_SECTOR} cap) blocks a 3rd in the same sector",
+    gate_same["passed"] is False,
+    f"gate={gate_same}",
+)
+
+signal_diff = pipe.evaluate_buy_signal(diff_sector_row, scratch_scorecard, user_id=SCRATCH_UID, market="IN")
+gate_diff = next(g for g in signal_diff["gates"] if g["gate"] == "sector_concentration")
+check(
+    "Same 2 open positions do NOT block a new signal in a different sector",
+    gate_diff["passed"] is True,
+    f"gate={gate_diff}",
+)
+
+unknown_sector_row = dict(same_sector_row, sector="—")
+signal_unknown = pipe.evaluate_buy_signal(unknown_sector_row, scratch_scorecard, user_id=SCRATCH_UID, market="IN")
+gate_unknown = next(g for g in signal_unknown["gates"] if g["gate"] == "sector_concentration")
+check(
+    "Unresolved sector ('—' placeholder) never false-blocks — treated as unknown, not as a shared bucket",
+    gate_unknown["passed"] is True,
+    f"gate={gate_unknown}",
+)
+
+# Clean up the scratch positions — this test suite must not leave fake
+# open positions sitting in the real dev DB for user 999998.
+for pid in _opened_ids:
+    db_mod.close_signal(user_id=SCRATCH_UID, position_id=pid, exit_price=100.0, exit_status=db_mod.EXIT_MANUAL)
+remaining = db_mod.get_active_positions(SCRATCH_UID)
+check(
+    "Scratch positions cleaned up after the sector-cap test",
+    remaining is None or remaining.empty,
+    f"remaining={remaining[['ticker']].to_dict('records') if remaining is not None and not remaining.empty else []}",
+)
+# Remove the scratch user entirely (ON DELETE CASCADE also mops up any
+# position this test failed to close explicitly above) so this suite
+# never leaves a permanent extra account in the real dev DB.
+with db_mod.get_connection() as _conn:
+    _conn.cursor().execute("DELETE FROM users WHERE user_id = ?", (SCRATCH_UID,))
+
 print("\n" + "=" * 60)
 print(f"STRESS TEST SUMMARY: {PASS}/{PASS + FAIL} PASSED | {FAIL} FAILED")
 if FINDINGS:

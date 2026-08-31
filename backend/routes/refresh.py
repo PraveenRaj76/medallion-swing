@@ -46,10 +46,16 @@ def post_open_trade(body: TradeOpenRequest):
     # NOTE: get_ticker_row is market-scoped since India and US share one leaderboard
     # table keyed by ticker — without it a US ticker's ATR lookup could silently read
     # an unrelated India row (or vice versa) if the same string ever existed in both.
+    # Sector is always looked up server-side (never client-supplied) — it's not
+    # something a caller should be trusted to set, and evaluate_buy_signal's
+    # sector_concentration gate needs the real value to mean anything. Always
+    # fetch the row (previously only fetched when ATR was missing) since
+    # sector is needed regardless.
+    row = db.get_ticker_row(body.ticker, market=market)
     atr = body.atr
     if atr is None:
-        row = db.get_ticker_row(body.ticker, market=market)
         atr = float(row["atr_value"]) if row is not None and row.get("atr_value") is not None else None
+    sector = row.get("sector") if row is not None else None
     ok, message = db.open_signal(
         user_id=uid,
         ticker=body.ticker,
@@ -58,6 +64,7 @@ def post_open_trade(body: TradeOpenRequest):
         target=body.target,
         atr=atr,
         market=market,
+        sector=sector,
     )
     if not ok:
         raise HTTPException(status_code=400, detail=message)

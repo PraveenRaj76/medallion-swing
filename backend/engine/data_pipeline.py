@@ -51,6 +51,13 @@ BUY_FUNDAMENTAL_FLOOR_PCT = float(os.environ.get("MEDALLION_BUY_FUNDAMENTAL_FLOO
 BUY_PE_PEER_PERCENTILE_MAX = float(os.environ.get("MEDALLION_BUY_PE_PEER_PERCENTILE_MAX", "60"))
 BUY_PEG_MAX = float(os.environ.get("MEDALLION_BUY_PEG_MAX", "2.0"))
 MAX_CONCURRENT_POSITIONS = int(os.environ.get("MEDALLION_MAX_CONCURRENT_POSITIONS", "5"))
+# 5 "diversified" positions that are all secretly the same sector bet is not
+# diversification — Van Tharp's own position-sizing material warns that
+# correlated trades compound past their individual 1%-risk sizing (10
+# correlated 1% bets can behave like one much larger one). At the default
+# of 5 concurrent positions, capping any one sector at 2 forces at least 3
+# distinct sectors before the position budget is exhausted.
+MAX_POSITIONS_PER_SECTOR = int(os.environ.get("MEDALLION_MAX_POSITIONS_PER_SECTOR", "2"))
 
 
 def should_skip_heavy_sync() -> Tuple[bool, Optional[datetime]]:
@@ -1663,6 +1670,23 @@ def evaluate_buy_signal(
         "gate": "position_budget",
         "passed": (not already_open) and open_count < MAX_CONCURRENT_POSITIONS,
         "detail": f"{open_count}/{MAX_CONCURRENT_POSITIONS} open, already_open={already_open}",
+    })
+
+    # "—" is the placeholder this codebase already uses for a genuinely
+    # unresolved sector (see factor_engine.sector_pack / us_data_provider
+    # row builders) — treated as unknown, not as one giant shared sector
+    # that would wrongly cap unrelated stocks against each other.
+    sector = str(row.get("sector") or "").strip()
+    same_sector_count = 0
+    if sector and sector != "—" and active is not None and not active.empty and "sector" in active.columns:
+        same_sector_count = int((active["sector"].astype(str) == sector).sum())
+    gates.append({
+        "gate": "sector_concentration",
+        "passed": same_sector_count < MAX_POSITIONS_PER_SECTOR,
+        "detail": (
+            f"{same_sector_count}/{MAX_POSITIONS_PER_SECTOR} open positions already in "
+            f"{sector or 'an unknown sector'}"
+        ),
     })
 
     all_passed = all(g["passed"] for g in gates)

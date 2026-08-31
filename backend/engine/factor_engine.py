@@ -261,16 +261,30 @@ def evaluate_fundamental_checklist(row: Any) -> Dict[str, Any]:
             roic = _optional(row, "roe")
             metric_label = "Capital return (ROE)"
             metric_note = " ROE used — ROCE not published."
+        # Capital-intensive cyclicals (steel, mining, cement, energy...)
+        # structurally run lower through-cycle returns on capital than
+        # asset-light "quality" names — that's a fact about the business
+        # model, not evidence of a worse business (Greenblatt's Magic
+        # Formula and sector-benchmarked ROIC research both rank returns
+        # against sector peers, never one flat number across sectors).
+        # This checklist already does exactly that for P/E and P/B caps
+        # (pe_cap/pb_cap below vary by pack) — this was the one return
+        # metric that didn't, penalizing a genuinely good cyclical against
+        # the same bar as a software company. Debt/interest-coverage are
+        # deliberately NOT relaxed the same way: leverage combined with
+        # cyclical earnings is a real, well-documented distress risk
+        # (Altman Z-score's whole premise), so those stay sector-blind.
+        roic_top, roic_mid, roic_low = (15.0, 9.0, 6.0) if pack == "cyclicals" else (20.0, 12.0, 8.0)
         if roic is None or quality == "MISSING":
             items.append(
                 _item(metric_label, "—" if roic is None else f"{roic:.1f}% (blocked)", 0.0, 10, False,
                       "Capital return missing or unverified — cannot claim quality franchise.")
             )
-        elif roic >= 20:
-            items.append(_item(metric_label, f"{roic:.1f}%", 10.0, 10, True, "Excellent capital efficiency (≥ 20%)." + metric_note))
-        elif roic >= 12:
+        elif roic >= roic_top:
+            items.append(_item(metric_label, f"{roic:.1f}%", 10.0, 10, True, f"Excellent capital efficiency (≥ {roic_top:.0f}%)." + metric_note))
+        elif roic >= roic_mid:
             items.append(_item(metric_label, f"{roic:.1f}%", 7.0, 10, True, "Solid capital return — quality franchise." + metric_note))
-        elif roic >= 8:
+        elif roic >= roic_low:
             items.append(_item(metric_label, f"{roic:.1f}%", 4.0, 10, False, "Average returns on capital." + metric_note))
         else:
             items.append(_item(metric_label, f"{roic:.1f}%", 1.0, 10, False, "Weak capital return — below cost of capital risk." + metric_note))
