@@ -46,6 +46,7 @@ def _build_quote(row: Dict[str, Any], market: str, ticker: str) -> Dict[str, Any
         "price_kind": row.get("price_kind") or "LAST",
         "source": row.get("price_source") or "yahoo",
         "fetched_at": None,
+        "price_as_of": row.get("price_as_of"),
     }
 
     if market == "IN":
@@ -78,6 +79,23 @@ def _build_quote(row: Dict[str, Any], market: str, ticker: str) -> Dict[str, Any
             quote["day_change_pct"] = round((price - prev) / prev * 100.0, 2) if prev else None
         except (TypeError, ValueError):
             pass
+
+    # Recheck logic: reconfirms the price is actually current instead of
+    # letting a "LIVE"/"LAST" label imply it by default. A real timestamped
+    # tick from the live feed (Angel One, India only) IS the market's
+    # current price at fetch time — trust it outright, even if the
+    # separate OHLCV history used for SMA/RSI/technicals happens to lag by
+    # a session (a real, observed case: yfinance's history() can return a
+    # most-recent bar with real volume but NaN OHLC before Yahoo's own
+    # backend backfills it — see nse.price_freshness). Without a live
+    # tick, fall back to how old that OHLCV bar actually is.
+    if quote.get("fetched_at"):
+        quote["is_stale"] = False
+        quote["days_stale"] = 0
+    else:
+        freshness = nse.price_freshness(quote.get("price_as_of"))
+        quote["is_stale"] = freshness["is_stale"]
+        quote["days_stale"] = freshness["days_stale"]
 
     return quote
 

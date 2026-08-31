@@ -76,8 +76,15 @@ function QuoteHero({ profile, currency }: { profile: ProfileResponse; currency: 
           </div>
           <div className="quote-meta">
             {q.source ? q.source.toUpperCase() : 'YAHOO'} · {q.price_kind}
-            {q.fetched_at ? ` · fetched ${q.fetched_at}` : ''}
+            {q.fetched_at ? ` · fetched ${q.fetched_at}` : q.price_as_of ? ` · price as of ${q.price_as_of}` : ''}
           </div>
+          {q.is_stale && (
+            <div className="quote-stale-badge">
+              {q.days_stale === 1
+                ? 'Not today’s price — 1 session behind'
+                : `Not today’s price — ${q.days_stale} sessions behind`}
+            </div>
+          )}
         </div>
       </div>
       <div className="quote-stats">

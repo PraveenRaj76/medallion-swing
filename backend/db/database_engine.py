@@ -637,6 +637,16 @@ def _ensure_leaderboard_extra_columns(cursor: sqlite3.Cursor) -> None:
         # checklist item (factor_engine._week52_range_item).
         "week52_high": "REAL",
         "week52_low": "REAL",
+        # The REAL calendar date of the OHLCV bar close_price/sma/rsi/atr
+        # were actually computed from (see nse_data_provider._clean_ohlcv /
+        # ._freshness) — not the refresh timestamp. Found live: yfinance's
+        # history() can return a most-recent bar with real volume but NaN
+        # OHLC (Yahoo's own site already has the settled price; the library
+        # just hasn't backfilled it), so close_price safely falls back to
+        # the prior day's real close — correct, but silent about it. This
+        # is what lets the UI show "price as of <date>" instead of
+        # implying every "LIVE"/"LAST" price is necessarily today's.
+        "price_as_of": "TEXT",
     }
     for name, decl in additions.items():
         if name not in cols:
@@ -1234,6 +1244,8 @@ def upsert_leaderboard_rows(rows: List[Dict[str, Any]]) -> bool:
                     week52_low = float(week52_low) if week52_low is not None and pd.notna(week52_low) else None
                 except (TypeError, ValueError):
                     week52_low = None
+                price_as_of = row.get("price_as_of")
+                price_as_of = str(price_as_of) if price_as_of else None
                 cursor.execute(
                     """
                     INSERT INTO screener_leaderboard (
@@ -1245,8 +1257,8 @@ def upsert_leaderboard_rows(rows: List[Dict[str, Any]]) -> bool:
                         rsi_14, delivery_pct_10d, alpha_3m,
                         pe_ratio, pb_ratio, roe, data_quality, fundamentals_verified, sources_ok_count,
                         ohlcv_ready, price_source, price_kind, prev_close, market, pe_peer_percentile,
-                        week52_high, week52_low
-                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                        week52_high, week52_low, price_as_of
+                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                     ON CONFLICT(ticker) DO UPDATE SET
                         company_name=excluded.company_name,
                         description=excluded.description,
@@ -1283,7 +1295,8 @@ def upsert_leaderboard_rows(rows: List[Dict[str, Any]]) -> bool:
                         market=excluded.market,
                         pe_peer_percentile=COALESCE(excluded.pe_peer_percentile, screener_leaderboard.pe_peer_percentile),
                         week52_high=COALESCE(excluded.week52_high, screener_leaderboard.week52_high),
-                        week52_low=COALESCE(excluded.week52_low, screener_leaderboard.week52_low)
+                        week52_low=COALESCE(excluded.week52_low, screener_leaderboard.week52_low),
+                        price_as_of=excluded.price_as_of
                     """,
                     (
                         row["ticker"], row.get("company_name", row["ticker"]),
@@ -1311,6 +1324,7 @@ def upsert_leaderboard_rows(rows: List[Dict[str, Any]]) -> bool:
                         pe_peer_percentile,
                         week52_high,
                         week52_low,
+                        price_as_of,
                     ),
                 )
         return True

@@ -61,6 +61,9 @@ export interface Quote {
   price_kind: string
   source: string
   fetched_at: string | null
+  price_as_of: string | null
+  is_stale: boolean | null
+  days_stale: number | null
 }
 
 export interface TradeLevels {

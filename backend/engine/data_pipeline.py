@@ -660,6 +660,15 @@ def _build_price_row_from_live(
         "alpha_3m": tech["alpha_3m"],
         "week52_high": tech.get("week52_high"),
         "week52_low": tech.get("week52_low"),
+        # This whole function only ever runs after a live LTP quote was
+        # successfully fetched this refresh cycle (px is None -> early
+        # return above) — close_price above is always that fresh quote,
+        # regardless of which branch built `tech`, so "today" is the
+        # honest answer here. This is a DIFFERENT freshness question from
+        # build_live_row's (Search Profile's single-ticker path, where
+        # close_price genuinely is anchored to a specific OHLCV bar date
+        # that can lag — see nse.price_freshness).
+        "price_as_of": db.today_ist(),
         "roic": prior.get("roic"),
         "net_debt_ebitda": prior.get("net_debt_ebitda"),
         "peg_ratio": prior.get("peg_ratio"),
