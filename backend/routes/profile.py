@@ -140,6 +140,14 @@ def get_profile(
             row = usdp.build_live_row(ticker)
             if row is None:
                 raise HTTPException(status_code=404, detail=f"No live data available for {ticker} right now.")
+            # pe_peer_percentile (see factor_engine.compute_peer_relative_valuation,
+            # now run for the US universe too — us_data_provider.refresh_universe)
+            # is a whole-batch ranking a single live-ticker fetch can't recompute
+            # on its own — carry the last refresh's value forward, same as the
+            # India branch below already does, so a live US search doesn't
+            # silently drop the "PE vs sector peers" checklist item.
+            if row.get("pe_peer_percentile") is None and prior_dict is not None:
+                row["pe_peer_percentile"] = prior_dict.get("pe_peer_percentile")
             source = "live"
         else:
             if prior_dict is None:

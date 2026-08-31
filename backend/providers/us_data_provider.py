@@ -576,6 +576,19 @@ def refresh_universe(tickers: Optional[List[str]] = None, max_workers: int = 8) 
             else:
                 accepted_rows.append(row)
 
+    # Same once-per-batch peer-PE ranking India's refresh already does (see
+    # data_pipeline.refresh_verified_live's identical call) — previously
+    # only ever run for the India universe, which left pe_peer_percentile
+    # permanently null for every US row despite the field being just as
+    # computable here. sector_pack() is market-agnostic text matching, so
+    # this needs no US-specific version.
+    if accepted_rows:
+        from engine import factor_engine as factors
+
+        peer_df = factors.compute_peer_relative_valuation(pd.DataFrame(accepted_rows))
+        if peer_df is not None and "pe_peer_percentile" in peer_df.columns:
+            accepted_rows = peer_df.to_dict("records")
+
     result["accepted"] = len(accepted_rows)
     result["rejected"] = rejected
     result["reject_reasons"] = reasons

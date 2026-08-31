@@ -16,12 +16,15 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
-from engine.factor_engine import CONFIDENCE_MULTIPLIER, _f, _item, _optional, _quality, _week52_range_item
-
-
-def _is_financial_us(row: Any) -> bool:
-    blob = " ".join(str(row.get(k) or "") for k in ("sector", "industry")).lower()
-    return any(w in blob for w in ("financ", "bank", "insurance", "capital markets"))
+from engine.factor_engine import (
+    CONFIDENCE_MULTIPLIER,
+    _f,
+    _item,
+    _optional,
+    _quality,
+    _week52_range_item,
+    sector_pack,
+)
 
 
 def evaluate_us_fundamental_checklist(row: Any) -> Dict[str, Any]:
@@ -29,10 +32,22 @@ def evaluate_us_fundamental_checklist(row: Any) -> Dict[str, Any]:
     real category than India's checklist (no promoter-pledge equivalent;
     SEC Form 3/4 insider-ownership aggregation is real but meaningfully
     more work to build correctly, so it's not faked in as a placeholder
-    here — see us_data_provider.py's module docstring)."""
+    here — see us_data_provider.py's module docstring).
+
+    Uses the same sector_pack() as India (quality/cyclicals/financials),
+    not a US-only financial/non-financial split — sector_pack's keyword
+    matching against sector+industry text works the same way regardless
+    of market (GICS "Energy"/"Materials"+"Steel" etc. match the same
+    cyclical keywords as India's NSE sector labels). Previously this
+    module only ever distinguished financial vs not, so a capital-
+    intensive US cyclical (steel, mining, energy) was held to the same
+    ROE/PE/PB bar as an asset-light software company — the same gap this
+    checklist already avoided for India via pe_cap/pb_cap below.
+    """
     items: List[Dict[str, Any]] = []
     quality = _quality(row)
-    financial = _is_financial_us(row)
+    pack = sector_pack(row)
+    financial = pack == "financials"
 
     if quality == "MISSING":
         items.append(
@@ -47,13 +62,17 @@ def evaluate_us_fundamental_checklist(row: Any) -> Dict[str, Any]:
         )
 
     roe = _optional(row, "roic") or _optional(row, "roe")
+    # Cyclicals get a relaxed floor, same reasoning as India's ROIC item —
+    # debt/interest-coverage stay sector-blind (leverage risk doesn't get
+    # cheaper just because the sector is capital-intensive).
+    roe_top, roe_mid, roe_low = (15.0, 9.0, 6.0) if pack == "cyclicals" else (20.0, 12.0, 8.0)
     if roe is None or quality == "MISSING":
         items.append(_item("ROE (Return on Equity)", "—", 0.0, 10, False, "Capital return missing or unverified."))
-    elif roe >= 20:
-        items.append(_item("ROE (Return on Equity)", f"{roe:.1f}%", 10.0, 10, True, "Excellent capital efficiency (≥ 20%)."))
-    elif roe >= 12:
+    elif roe >= roe_top:
+        items.append(_item("ROE (Return on Equity)", f"{roe:.1f}%", 10.0, 10, True, f"Excellent capital efficiency (≥ {roe_top:.0f}%)."))
+    elif roe >= roe_mid:
         items.append(_item("ROE (Return on Equity)", f"{roe:.1f}%", 7.0, 10, True, "Solid capital return — quality franchise."))
-    elif roe >= 8:
+    elif roe >= roe_low:
         items.append(_item("ROE (Return on Equity)", f"{roe:.1f}%", 4.0, 10, False, "Average returns on capital."))
     else:
         items.append(_item("ROE (Return on Equity)", f"{roe:.1f}%", 1.0, 10, False, "Weak capital return."))
@@ -129,19 +148,19 @@ def evaluate_us_fundamental_checklist(row: Any) -> Dict[str, Any]:
         items.append(_item("Profit Growth (YoY)", f"{growth:.1f}%", 0.0, 7, False, "Negative profit growth."))
 
     pe = _optional(row, "pe_ratio")
-    pe_cap = 18 if financial else 30
-    pe_mid = 28 if financial else 45
+    pe_cap = 18 if financial else (40 if pack == "cyclicals" else 30)
+    pe_mid = 28 if financial else (55 if pack == "cyclicals" else 45)
     if pe is None or pe <= 0 or quality == "MISSING":
         items.append(_item("Stock P/E", "—" if pe is None else f"{pe:.1f}", 0.0, 6, False, "P/E missing or not verified."))
     elif pe <= pe_cap:
-        items.append(_item("Stock P/E", f"{pe:.1f}", 6.0, 6, True, "Reasonable PE for this pack."))
+        items.append(_item("Stock P/E", f"{pe:.1f}", 6.0, 6, True, f"Reasonable PE for {pack} pack."))
     elif pe <= pe_mid:
         items.append(_item("Stock P/E", f"{pe:.1f}", 3.0, 6, False, "Elevated PE."))
     else:
         items.append(_item("Stock P/E", f"{pe:.1f}", 0.5, 6, False, "Extremely rich PE — valuation danger."))
 
     pb = _optional(row, "pb_ratio")
-    pb_cap = 2.5 if financial else 6.0
+    pb_cap = 2.5 if financial else (4.0 if pack == "cyclicals" else 6.0)
     if pb is None or quality == "MISSING":
         items.append(_item("P/B Ratio", "—", 0.0, 4, False, "Book value / P/B not available."))
     elif pb <= pb_cap * 0.6:
@@ -150,6 +169,25 @@ def evaluate_us_fundamental_checklist(row: Any) -> Dict[str, Any]:
         items.append(_item("P/B Ratio", f"{pb:.2f}", 2.0, 4, True, "Reasonable P/B for this pack."))
     else:
         items.append(_item("P/B Ratio", f"{pb:.2f}", 0.5, 4, False, "Rich vs book value."))
+
+    # Same peer-percentile lens as India (factor_engine.compute_peer_
+    # relative_valuation) — only appears once us_data_provider.refresh_
+    # universe has run it across the current US batch; previously this
+    # was never computed for US at all, which silently left the BUY
+    # gate's "relative_valuation" check running on PEG alone for every
+    # US signal (see evaluate_buy_signal) even though the same peer data
+    # is just as computable here as it is for India.
+    peer_pctl = _optional(row, "pe_peer_percentile")
+    if peer_pctl is not None and quality != "MISSING":
+        if peer_pctl <= 25:
+            items.append(_item("PE vs sector peers", f"{peer_pctl:.0f}th pct.", 4.0, 4, True,
+                                "Cheaper than most same-pack peers right now."))
+        elif peer_pctl <= 60:
+            items.append(_item("PE vs sector peers", f"{peer_pctl:.0f}th pct.", 2.0, 4, True,
+                                "Mid-pack valuation vs peers."))
+        else:
+            items.append(_item("PE vs sector peers", f"{peer_pctl:.0f}th pct.", 0.0, 4, False,
+                                "Pricier than most same-pack peers right now."))
 
     scored = [i for i in items if i["max_marks"] > 0]
     total = round(sum(i["marks"] for i in scored), 1)
@@ -164,7 +202,7 @@ def evaluate_us_fundamental_checklist(row: Any) -> Dict[str, Any]:
         "total_filters": len(scored),
         "pct": round(total / max_total * 100.0, 1) if max_total else 0.0,
         "data_quality": quality,
-        "sector_pack": "financials" if financial else "quality",
+        "sector_pack": pack,
     }
 
 
