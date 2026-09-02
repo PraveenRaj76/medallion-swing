@@ -678,6 +678,17 @@ td.ticker {
   background-repeat: no-repeat;
   background-position: right 12px center;
 }
+/* The closed <select> pill can stay dim (it matches the rest of the
+   filterbar), but its dropdown options are rendered by the OS as a native
+   popup with its own (usually light) background — inheriting --text-dim
+   there made every unselected option nearly invisible until hovered,
+   since only the browser's own highlight color was readable. option{}
+   needs an explicit solid background: most browsers ignore the page's
+   translucent rgba() surface tokens for native option popups. */
+.filterbar select option {
+  color: var(--text);
+  background: var(--bg-2);
+}
 .toggle {
   display: flex;
   align-items: center;
@@ -1503,6 +1514,90 @@ td.ticker {
   border-radius: 7px;
   padding: 8px 10px;
   line-height: 1.6 !important;
+}
+
+/* ---------- checklist explainer range bar (min/normal/max + example) ---------- */
+.range-bar-wrap {
+  margin-top: 12px;
+}
+.range-bar {
+  position: relative;
+  display: flex;
+  height: 10px;
+  border-radius: 6px;
+  overflow: visible;
+}
+.range-seg {
+  height: 100%;
+}
+.range-seg:first-child {
+  border-radius: 6px 0 0 6px;
+}
+.range-seg:last-child {
+  border-radius: 0 6px 6px 0;
+}
+.range-seg.tier-strong {
+  background: var(--gain);
+  opacity: 0.55;
+}
+.range-seg.tier-mid {
+  background: var(--warn);
+  opacity: 0.55;
+}
+.range-seg.tier-weak {
+  background: var(--loss);
+  opacity: 0.55;
+}
+.range-marker {
+  position: absolute;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 2;
+}
+.range-marker-dot {
+  display: block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--gold);
+  border: 2px solid var(--bg-2);
+  box-shadow: 0 0 6px 1px rgba(228, 183, 92, 0.7);
+}
+.range-scale {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 6px;
+  font-size: 10.5px;
+  font-family: 'JetBrains Mono', monospace;
+  color: var(--text-faint);
+}
+.range-example {
+  color: var(--gold);
+  font-weight: 600;
+}
+.range-band-labels {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  margin-top: 8px;
+}
+.range-band-label {
+  font-size: 10px;
+  padding: 2px 7px;
+  border-radius: 5px;
+  font-family: 'JetBrains Mono', monospace;
+}
+.range-band-label.tier-strong {
+  color: var(--gain);
+  background: var(--gain-dim);
+}
+.range-band-label.tier-mid {
+  color: var(--warn);
+  background: var(--warn-dim);
+}
+.range-band-label.tier-weak {
+  color: var(--loss);
+  background: var(--loss-dim);
 }
 
 /* ---------- crown card (most undervalued sector) — sparkle magic ---------- */

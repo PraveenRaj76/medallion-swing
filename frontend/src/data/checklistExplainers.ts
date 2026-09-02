@@ -7,12 +7,32 @@
  * with it.
  */
 
+export interface ScoringBand {
+  /** Upper edge of this band on the axis (same unit as ExampleRange.unit). */
+  to: number
+  label: string
+  marks: number
+}
+
+export interface ExampleRange {
+  min: number
+  max: number
+  /** Appended after the number, e.g. '%', 'x'. Empty string for a plain ratio/score. */
+  unit: string
+  /** Ordered low to high; each band's `to` is its own upper edge (the first band's floor is `min`). */
+  bands: ScoringBand[]
+  /** A small illustrative value to mark on the bar — NOT a live stock's value; this panel isn't about one stock. */
+  example: number
+}
+
 export interface ExplainerItem {
   name: string
   maxMarks: number
   what: string
   why: string
   scoring: string
+  /** Optional — omitted for items with no clean single-axis band structure (informational sector stats, etc). */
+  range?: ExampleRange
 }
 
 export const FUNDAMENTAL_EXPLAINERS: ExplainerItem[] = [
@@ -22,6 +42,18 @@ export const FUNDAMENTAL_EXPLAINERS: ExplainerItem[] = [
     what: 'Return on Capital Employed — how much profit a company squeezes out of every rupee it has invested in the business. Banks/NBFCs use Return on Equity instead, since "capital employed" doesn\'t mean the same thing for a lender.',
     why: 'This is the single best gauge of whether a business is genuinely good, not just cheap. A company that turns ₹100 of capital into ₹20 of profit every year is compounding value; one that turns it into ₹5 is treading water.',
     scoring: '≥20% → 10/10 (excellent) · 12–20% → 7/10 (solid) · 8–12% → 4/10 (average) · below 8% → 1/10 (weak, below cost of capital).',
+    range: {
+      min: 0,
+      max: 30,
+      unit: '%',
+      bands: [
+        { to: 8, label: 'Weak', marks: 1 },
+        { to: 12, label: 'Average', marks: 4 },
+        { to: 20, label: 'Solid', marks: 7 },
+        { to: 30, label: 'Excellent', marks: 10 },
+      ],
+      example: 16,
+    },
   },
   {
     name: 'Net Debt / EBITDA',
@@ -29,6 +61,18 @@ export const FUNDAMENTAL_EXPLAINERS: ExplainerItem[] = [
     what: "How many years of the company's core operating earnings it would take to pay off all its net debt. Skipped entirely for banks — leverage means something different for a lender.",
     why: "Debt itself isn't bad, but too much of it turns a normal bad quarter into a real crisis — lenders can force asset sales or dilution exactly when the stock is already down.",
     scoring: '≤1.0x → 8/8 · 1.0–2.0x → 5/8 · 2.0–3.5x → 2/8 · above 3.5x → 0/8. Shown as N/A (0/0, doesn\'t block the name) when this isn\'t published free for the stock.',
+    range: {
+      min: 0,
+      max: 5,
+      unit: 'x',
+      bands: [
+        { to: 1, label: 'Conservative', marks: 8 },
+        { to: 2, label: 'Manageable', marks: 5 },
+        { to: 3.5, label: 'Elevated', marks: 2 },
+        { to: 5, label: 'High', marks: 0 },
+      ],
+      example: 1.5,
+    },
   },
   {
     name: 'PEG Ratio',
@@ -36,6 +80,18 @@ export const FUNDAMENTAL_EXPLAINERS: ExplainerItem[] = [
     what: "P/E divided by the company's profit growth rate — a way of asking \"am I paying a fair price for this much growth?\" instead of judging P/E in isolation.",
     why: 'A stock on a P/E of 40 can still be a bargain if profit is growing 40% a year, and a stock on a P/E of 12 can be expensive if profit is shrinking. PEG folds growth into the valuation question.',
     scoring: '≤1.0 → 8/8 (growth attractively priced) · 1.0–1.5 → 6/8 · 1.5–2.5 → 3/8 (premium) · above 2.5 → 0.5/8 (expensive). Needs positive profit growth to count at all.',
+    range: {
+      min: 0,
+      max: 3,
+      unit: '',
+      bands: [
+        { to: 1.0, label: 'Cheap', marks: 8 },
+        { to: 1.5, label: 'Reasonable', marks: 6 },
+        { to: 2.5, label: 'Premium', marks: 3 },
+        { to: 3, label: 'Expensive', marks: 0.5 },
+      ],
+      example: 1.2,
+    },
   },
   {
     name: 'Interest Coverage',
@@ -43,6 +99,17 @@ export const FUNDAMENTAL_EXPLAINERS: ExplainerItem[] = [
     what: "How many times over the company's operating profit could pay its annual interest bill. Self-computed from NSE's own quarterly XBRL filing, not a scraped estimate. Skipped for banks, where it isn't a meaningful ratio.",
     why: "Low coverage is an early-warning sign — a company that can barely afford its interest payments today has no cushion if profit dips or rates rise.",
     scoring: '≥8x → 6/6 (strong) · 4–8x → 4/6 (adequate) · below 4x → 0/6 (weak). Shown as N/A when the latest filing didn\'t report finance costs.',
+    range: {
+      min: 0,
+      max: 12,
+      unit: 'x',
+      bands: [
+        { to: 4, label: 'Weak', marks: 0 },
+        { to: 8, label: 'Adequate', marks: 4 },
+        { to: 12, label: 'Strong', marks: 6 },
+      ],
+      example: 6,
+    },
   },
   {
     name: 'Promoter Pledge',
@@ -50,6 +117,17 @@ export const FUNDAMENTAL_EXPLAINERS: ExplainerItem[] = [
     what: "What percentage of the founders'/promoters' own shareholding is pledged as collateral against a loan — sourced from NSE's own regulatory SAST disclosure.",
     why: 'Heavy pledging is one of the more reliable red flags in Indian markets — if the stock falls far enough, the lender can force-sell the pledged shares, which pushes the price down further in a vicious cycle.',
     scoring: '≤5% → 5/5 (low/no pledging) · 5–15% → 2.5/5 (moderate) · above 15% → 0/5 (high — red flag).',
+    range: {
+      min: 0,
+      max: 25,
+      unit: '%',
+      bands: [
+        { to: 5, label: 'Low', marks: 5 },
+        { to: 15, label: 'Moderate', marks: 2.5 },
+        { to: 25, label: 'High', marks: 0 },
+      ],
+      example: 3,
+    },
   },
   {
     name: 'Profit Growth',
@@ -57,6 +135,18 @@ export const FUNDAMENTAL_EXPLAINERS: ExplainerItem[] = [
     what: "Year-over-year growth in the company's net profit.",
     why: "A cheap stock attached to a shrinking business is a value trap, not a bargain. Growth is what makes today's valuation matter for tomorrow's return.",
     scoring: '≥20% → 7/7 (strong) · 10–20% → 5/7 (healthy double-digit) · 0–10% → 2/7 (low/flat) · negative → 0/7.',
+    range: {
+      min: -10,
+      max: 30,
+      unit: '%',
+      bands: [
+        { to: 0, label: 'Negative', marks: 0 },
+        { to: 10, label: 'Low/flat', marks: 2 },
+        { to: 20, label: 'Healthy', marks: 5 },
+        { to: 30, label: 'Strong', marks: 7 },
+      ],
+      example: 15,
+    },
   },
   {
     name: 'Stock P/E',
@@ -64,6 +154,17 @@ export const FUNDAMENTAL_EXPLAINERS: ExplainerItem[] = [
     what: 'Price-to-Earnings — how many years of the current profit it would take to "earn back" what you paid for the stock. The pass/fail ceiling adjusts by sector (cyclicals get more room, since their earnings swing harder year to year).',
     why: "The most basic sanity check on price: is this stock priced like a reasonable business, or priced for perfection?",
     scoring: 'Within the sector-adjusted cap (25–35x depending on the pack) → 6/6 · up to the sector-adjusted mid-point (40–50x) → 3/6 · beyond that → 0.5/6.',
+    range: {
+      min: 0,
+      max: 60,
+      unit: '',
+      bands: [
+        { to: 25, label: 'Reasonable', marks: 6 },
+        { to: 40, label: 'Elevated', marks: 3 },
+        { to: 60, label: 'Rich', marks: 0.5 },
+      ],
+      example: 22,
+    },
   },
   {
     name: 'P/B Ratio',
@@ -71,6 +172,17 @@ export const FUNDAMENTAL_EXPLAINERS: ExplainerItem[] = [
     what: "Price-to-Book — the stock price relative to the company's net accounting assets per share. This is the PRIMARY valuation lens for banks (8 marks there, not 4) since book value is real, mark-to-market-ish capital for a lender.",
     why: "Earnings can swing wildly for cyclical or asset-heavy businesses year to year; book value is steadier, so it's a useful second cheapness check P/E alone can miss.",
     scoring: 'Cheap (≤60% of the sector cap) → full marks · within the cap → partial · rich → near-zero. The exact cap varies by sector pack (financials 2.5x, cyclicals 3.0x, others 5.0x).',
+    range: {
+      min: 0,
+      max: 8,
+      unit: '',
+      bands: [
+        { to: 3, label: 'Cheap', marks: 4 },
+        { to: 5, label: 'Reasonable', marks: 2 },
+        { to: 8, label: 'Rich', marks: 0.5 },
+      ],
+      example: 2.5,
+    },
   },
   {
     name: 'PE vs Sector Peers',
@@ -78,6 +190,17 @@ export const FUNDAMENTAL_EXPLAINERS: ExplainerItem[] = [
     what: "Where this stock's P/E ranks (0–100th percentile) against OTHER stocks in the same sector, in the live universe, right now.",
     why: 'The honest substitute for "is this cheap vs its own 10-year history" — getting a decade of quarterly P/E for free at 200-stock scale isn\'t realistic, so this compares against real peers instead. Only appears once enough peer data exists.',
     scoring: '≤25th percentile → 4/4 (cheaper than most peers) · 25th–60th → 2/4 (mid-pack) · above 60th → 0/4 (pricier than most peers).',
+    range: {
+      min: 0,
+      max: 100,
+      unit: 'th pct.',
+      bands: [
+        { to: 25, label: 'Cheaper', marks: 4 },
+        { to: 60, label: 'Mid-pack', marks: 2 },
+        { to: 100, label: 'Pricier', marks: 0 },
+      ],
+      example: 30,
+    },
   },
 ]
 
@@ -88,6 +211,17 @@ export const TECHNICAL_EXPLAINERS: ExplainerItem[] = [
     what: 'Is the current price above its 200-day (roughly 10-month) moving average?',
     why: 'The 200-day line is the classic dividing line between a long-term uptrend and downtrend — trading above it is the single most-used definition of "this stock is not broken."',
     scoring: 'Above → 10/10 · within 2% (contested) → 5/10 · below → 0/10.',
+    range: {
+      min: -10,
+      max: 15,
+      unit: '%',
+      bands: [
+        { to: -2, label: 'Below', marks: 0 },
+        { to: 0, label: 'Contested', marks: 5 },
+        { to: 15, label: 'Above', marks: 10 },
+      ],
+      example: 5,
+    },
   },
   {
     name: 'Price vs 50-Day SMA',
@@ -95,6 +229,16 @@ export const TECHNICAL_EXPLAINERS: ExplainerItem[] = [
     what: 'Is price above its 50-day (roughly 2.5-month) moving average?',
     why: "A shorter-term trend check — confirms the stock isn't just in a long-term uptrend on paper, but has been genuinely strong recently too.",
     scoring: 'Above → 6/6 · below → 2/6 · unavailable → 3/6 (neutral).',
+    range: {
+      min: -10,
+      max: 15,
+      unit: '%',
+      bands: [
+        { to: 0, label: 'Below', marks: 2 },
+        { to: 15, label: 'Above', marks: 6 },
+      ],
+      example: 4,
+    },
   },
   {
     name: 'SMA Stack (50 vs 200)',
@@ -102,6 +246,16 @@ export const TECHNICAL_EXPLAINERS: ExplainerItem[] = [
     what: 'Is the 50-day average itself trading above the 200-day average — a "golden cross" style alignment?',
     why: "When the faster average leads the slower one, it signals momentum is building, not just that price happens to be above a line today.",
     scoring: '50 > 200 → 6/6 (bullish stack) · 50 < 200 → 1/6 ("death cross" style, bearish) · incomplete data → 2/6 (neutral).',
+    range: {
+      min: -10,
+      max: 10,
+      unit: '%',
+      bands: [
+        { to: 0, label: 'Bearish (death cross)', marks: 1 },
+        { to: 10, label: 'Bullish (golden cross)', marks: 6 },
+      ],
+      example: 3,
+    },
   },
   {
     name: 'RSI (14)',
@@ -109,6 +263,18 @@ export const TECHNICAL_EXPLAINERS: ExplainerItem[] = [
     what: 'Relative Strength Index over 14 days — a 0–100 gauge of how "hot" or "cold" recent buying and selling pressure has been.',
     why: "Extremely overbought conditions often precede a pullback; the checklist's sweet spot (45–65) is a stock with real momentum that isn't stretched to the point of exhaustion.",
     scoring: '45–65 → 10/10 (healthy zone) · 35–45 → 6/10 (cooling, constructive) · above 65 → 0/10 (overextended, entry locked) · below 35 → 3/10 (oversold, wait for reclaim).',
+    range: {
+      min: 0,
+      max: 100,
+      unit: '',
+      bands: [
+        { to: 35, label: 'Oversold', marks: 3 },
+        { to: 45, label: 'Cooling', marks: 6 },
+        { to: 65, label: 'Healthy zone', marks: 10 },
+        { to: 100, label: 'Overextended', marks: 0 },
+      ],
+      example: 55,
+    },
   },
   {
     name: '3-Month Alpha vs Nifty',
@@ -116,6 +282,18 @@ export const TECHNICAL_EXPLAINERS: ExplainerItem[] = [
     what: 'How much this stock has outperformed — or lagged — the Nifty benchmark over the last three months.',
     why: "A stock beating the index shows real, stock-specific demand — capital is choosing this name, not just riding a market-wide rally that would lift almost anything.",
     scoring: '≥10% → 8/8 (strong) · 0–10% → 5/8 (mild outperform) · -8% to 0% → 2/8 (mild underperform) · below -8% → 0/8 (severe weakness).',
+    range: {
+      min: -20,
+      max: 20,
+      unit: '%',
+      bands: [
+        { to: -8, label: 'Severe weakness', marks: 0 },
+        { to: 0, label: 'Mild underperform', marks: 2 },
+        { to: 10, label: 'Mild outperform', marks: 5 },
+        { to: 20, label: 'Strong', marks: 8 },
+      ],
+      example: 6,
+    },
   },
   {
     name: '52-Week Range Position',
@@ -130,6 +308,17 @@ export const TECHNICAL_EXPLAINERS: ExplainerItem[] = [
     what: "What share of the day's traded volume was actually delivered (taken into demat) rather than squared off intraday — real data from NSE's own daily bhavcopy archive, not a proxy or estimate.",
     why: "High delivery suggests real investors are accumulating for the medium term; low delivery can mean the volume is mostly speculative day-trading churn with less conviction behind it.",
     scoring: '≥50% → 5/5 (strong conviction) · 40–50% → 3.5/5 (acceptable) · below 40% → 1/5 (weak). Skipped (doesn\'t block the name) when NSE genuinely has no delivery data for that ticker in the scan window.',
+    range: {
+      min: 0,
+      max: 100,
+      unit: '%',
+      bands: [
+        { to: 40, label: 'Weak', marks: 1 },
+        { to: 50, label: 'Acceptable', marks: 3.5 },
+        { to: 100, label: 'Strong', marks: 5 },
+      ],
+      example: 55,
+    },
   },
   {
     name: 'ATR % of Price',
@@ -137,6 +326,17 @@ export const TECHNICAL_EXPLAINERS: ExplainerItem[] = [
     what: "Average True Range as a percentage of price — roughly how much the stock typically moves, up or down, on a normal day.",
     why: "Too quiet and a breakout may lack the energy to follow through; too wild and a normal stop-loss gets chopped out by noise before the real move even starts. This checklist wants a tradeable middle ground.",
     scoring: '1.0%–4.5% → 5/5 (tradeable swing band) · below 1.0% → 2/5 (too quiet) · above 4.5% → 1.5/5 (too choppy).',
+    range: {
+      min: 0,
+      max: 10,
+      unit: '%',
+      bands: [
+        { to: 1, label: 'Too quiet', marks: 2 },
+        { to: 4.5, label: 'Tradeable', marks: 5 },
+        { to: 10, label: 'Too choppy', marks: 1.5 },
+      ],
+      example: 2.5,
+    },
   },
   {
     name: '21-Day Momentum',
@@ -144,6 +344,17 @@ export const TECHNICAL_EXPLAINERS: ExplainerItem[] = [
     what: "Price change over the last 21 trading sessions — roughly the last month.",
     why: "A faster, more responsive momentum check than the 3-month alpha figure — catches a stock that's recently accelerating (or stalling) before the longer window would show it.",
     scoring: '≥5% → 5/5 (positive) · 0–5% → 3/5 (flat-to-up) · negative → 0.5/5. Shows a neutral 2/5 when there isn\'t enough price history yet to compute it.',
+    range: {
+      min: -15,
+      max: 15,
+      unit: '%',
+      bands: [
+        { to: 0, label: 'Negative', marks: 0.5 },
+        { to: 5, label: 'Flat-to-up', marks: 3 },
+        { to: 15, label: 'Positive', marks: 5 },
+      ],
+      example: 4,
+    },
   },
 ]
 
