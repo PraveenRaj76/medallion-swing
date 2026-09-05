@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react'
+import { useEffect, useMemo, useState, type CSSProperties, type FormEvent } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { ApiError, getProfile, postCloseTrade, postOpenTrade } from '../api/client'
@@ -16,6 +16,50 @@ function str(raw: unknown): string | null {
 
 function fmt(v: number | null | undefined, decimals = 2): string {
   return v == null || Number.isNaN(v) ? '—' : v.toFixed(decimals)
+}
+
+type Verdict = 'BUY' | 'WAIT' | 'AVOID'
+
+/** Turns the gate list into one plain-language call instead of leaving the
+ * user to piece it together from a small pill plus a scroll down to Signal
+ * Gates. BUY needs every gate clear (unchanged from evaluate_buy_signal's
+ * own all-or-nothing rule). AVOID is reserved for cases worth actually
+ * steering away from — unverified fundamentals, a weak composite score, or
+ * several gates down at once — not just "not a BUY today." Everything
+ * else is WAIT: the checklist likes the stock, something outside its own
+ * control (most often market_regime) hasn't confirmed yet. */
+function computeVerdict(profile: ProfileResponse): { verdict: Verdict; reason: string } {
+  const { buy_signal, checklist } = profile
+  if (buy_signal.signal === 'BUY') {
+    return { verdict: 'BUY', reason: 'Every checklist gate clears — this is a live signal.' }
+  }
+  const dataBlocked = buy_signal.gates.some((g) => g.gate === 'data_quality' && !g.passed)
+  const blockedCount = buy_signal.blocked_by.length
+  const readable = buy_signal.blocked_by.map((g) => g.replace(/_/g, ' ')).join(', ')
+  if (dataBlocked) {
+    return { verdict: 'AVOID', reason: "Fundamentals aren't verified for this stock yet — nothing solid to size a position on." }
+  }
+  if (checklist.composite_pct < 50 || blockedCount >= 3) {
+    return { verdict: 'AVOID', reason: `Weak across the board (${checklist.composite_pct.toFixed(0)}% composite) — blocked by: ${readable}.` }
+  }
+  return {
+    verdict: 'WAIT',
+    reason: `Close — ${checklist.composite_pct.toFixed(0)}% composite, but blocked by: ${readable}.`,
+  }
+}
+
+function VerdictBanner({ profile }: { profile: ProfileResponse }) {
+  const { verdict, reason } = computeVerdict(profile)
+  const sub = { BUY: 'Ready to add', WAIT: 'Not yet — hold off', AVOID: 'Skip this one' }[verdict]
+  return (
+    <div className={`verdict-banner verdict-${verdict.toLowerCase()}`}>
+      <div className="verdict-main">
+        <div className="verdict-label">{verdict}</div>
+        <div className="verdict-sub">{sub}</div>
+      </div>
+      <div className="verdict-reason">{reason}</div>
+    </div>
+  )
 }
 
 function ChecklistCard({ title, group }: { title: string; group: ChecklistGroup }) {
@@ -144,6 +188,55 @@ function QuoteHero({ profile, currency }: { profile: ProfileResponse; currency: 
   )
 }
 
+/** Celebratory moment for opening a Forward-Test signal — the one action
+ * on this page that actually commits to something. Reference: the burst
+ * a Strava activity gets on completion, reworked into this app's own
+ * cosmic/medallion vocabulary (gold particles + a shooting-star streak,
+ * not confetti) rather than borrowing Strava's look directly. Pure CSS
+ * keyframes driven by per-particle custom properties computed once via
+ * useMemo — matches the lightweight, no-extra-dependency animation
+ * approach already used elsewhere in this app (App.css's pulse/crownFloat
+ * keyframes), rather than pulling in a canvas-confetti-style library for
+ * one moment. */
+function CosmicBurst() {
+  const particles = useMemo(
+    () =>
+      Array.from({ length: 20 }, (_, i) => {
+        const angle = (360 / 20) * i + (Math.random() * 12 - 6)
+        return {
+          key: i,
+          angle,
+          dist: 55 + Math.random() * 65,
+          size: i % 5 === 0 ? 3.5 : 1.5 + Math.random() * 2,
+          delay: Math.random() * 0.12,
+          duration: 0.85 + Math.random() * 0.5,
+          streak: i % 5 === 0,
+        }
+      }),
+    [],
+  )
+  return (
+    <div className="cosmic-burst" aria-hidden="true">
+      <div className="cosmic-shockwave" />
+      {particles.map((p) => (
+        <span
+          key={p.key}
+          className={`cosmic-particle${p.streak ? ' streak' : ''}`}
+          style={
+            {
+              '--angle': `${p.angle}deg`,
+              '--dist': `${p.dist}px`,
+              '--size': `${p.size}px`,
+              '--delay': `${p.delay}s`,
+              '--duration': `${p.duration}s`,
+            } as CSSProperties
+          }
+        />
+      ))}
+    </div>
+  )
+}
+
 function BuyForm({
   profile,
   currency,
@@ -204,9 +297,10 @@ function BuyForm({
     return (
       <div className="card trade-card">
         <div className="trade-success-banner">
+          <CosmicBurst />
           <div className="trade-success-icon">✓</div>
           <div className="trade-success-body">
-            <div className="trade-success-title">Trade opened — {profile.ticker} is now tracked</div>
+            <div className="trade-success-title">Added to Forward-Test — {profile.ticker} is now tracked</div>
             <div className="trade-success-detail">
               Entry {currency}
               {opened.entry.toFixed(2)} · Stop {currency}
@@ -262,7 +356,7 @@ function BuyForm({
         </div>
       </div>
       <button className="action-btn buy" disabled={submitting || !entry || !stop || !target} onClick={submit}>
-        {submitting ? 'Opening…' : `Buy — Track 1 Share @ ${currency}${entry.toFixed(2)}`}
+        {submitting ? 'Adding…' : `+ Add to Forward-Test — 1 Share @ ${currency}${entry.toFixed(2)}`}
       </button>
       {err && <div className="trade-err-banner">{err}</div>}
       {levels && (
@@ -502,26 +596,60 @@ function FundamentalsPanel({ profile, currency, market }: { profile: ProfileResp
 
 export function SearchProfile() {
   const [params, setParams] = useSearchParams()
+  // No user-facing market picker (see runSearch) — market is what the
+  // search RESOLVED to, purely a result label now, not an input.
   const [market, setMarket] = useState<'in' | 'us'>((params.get('market') as 'in' | 'us') || 'in')
-  const [ticker, setTicker] = useState(params.get('ticker') ?? 'RELIANCE')
+  const [ticker, setTicker] = useState(params.get('ticker') ?? '')
   const [profile, setProfile] = useState<ProfileResponse | null>(null)
   const [loading, setLoading] = useState(false)
+  const [searchingMarket, setSearchingMarket] = useState<'in' | 'us' | null>(null)
   const [error, setError] = useState<string | null>(null)
   const { userId } = useAuth()
 
-  async function runSearch(sym: string, mkt: 'in' | 'us' = market) {
-    if (!sym.trim()) return
+  // One ticker, any market, any country — the user shouldn't have to know
+  // or declare which exchange a symbol trades on before searching for it.
+  // A ticker string alone doesn't reveal that, so this tries India first
+  // (this app's primary market) and only falls through to US on failure,
+  // rather than firing both live fetches in parallel every time — a
+  // wasted duplicate live fetch (Yahoo/Screener.in and SEC EDGAR/Yahoo
+  // both hit on every single search) isn't a fair trade for shaving
+  // latency off the less common case.
+  async function runSearch(sym: string) {
+    const upper = sym.trim().toUpperCase()
+    if (!upper) return
     setLoading(true)
     setError(null)
-    setParams({ market: mkt, ticker: sym.toUpperCase() })
+    setParams({ ticker: upper })
     try {
-      const res = await getProfile(sym, true, userId ?? undefined, mkt.toUpperCase() as 'IN' | 'US')
+      setSearchingMarket('in')
+      try {
+        const res = await getProfile(upper, true, userId ?? undefined, 'IN')
+        setProfile(res)
+        setMarket(res.market.toLowerCase() as 'in' | 'us')
+        return
+      } catch {
+        // Fall through to US below — a failure here just means "not this
+        // market," not necessarily "not found anywhere."
+      }
+      setSearchingMarket('us')
+      const res = await getProfile(upper, true, userId ?? undefined, 'US')
       setProfile(res)
+      setMarket(res.market.toLowerCase() as 'in' | 'us')
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Could not fetch live data for this ticker.')
+      setError(
+        err instanceof ApiError
+          ? `Couldn't find "${upper}" in either market. ${err.message}`
+          : `Couldn't find "${upper}" in either market — check the ticker and try again.`,
+      )
       setProfile(null)
     } finally {
+      // One outer finally covers every exit path (IN success, US success,
+      // both failed) — the earlier version's `return` from inside the IN
+      // try-block skipped its own finally entirely, leaving loading stuck
+      // true forever on a successful IN match (found live: the page never
+      // left "Searching…" even though the fetch had already succeeded).
       setLoading(false)
+      setSearchingMarket(null)
     }
   }
 
@@ -530,23 +658,14 @@ export function SearchProfile() {
     runSearch(ticker)
   }
 
-  // Auto-run once for a ticker/market landed on via URL (e.g. a Screener row
+  // Auto-run once for a ticker landed on via URL (e.g. a Screener row
   // click) — a real effect, not a render-time navigate() call, which React
   // Router warns about (setParams() inside runSearch calls navigate()).
   useEffect(() => {
     const t = params.get('ticker')
-    if (t) runSearch(t, market)
+    if (t) runSearch(t)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
-
-  function switchMarket(m: 'in' | 'us') {
-    setMarket(m)
-    setProfile(null)
-    setError(null)
-    const next = m === 'in' ? 'RELIANCE' : 'AAPL'
-    setTicker(next)
-    runSearch(next, m)
-  }
 
   const currency = market === 'us' ? '$' : '₹'
   const raw = profile?.raw ?? {}
@@ -571,20 +690,13 @@ export function SearchProfile() {
             className="mono"
             value={ticker}
             onChange={(e) => setTicker(e.target.value.toUpperCase())}
-            placeholder={market === 'in' ? 'e.g. RELIANCE' : 'e.g. AAPL'}
+            placeholder="e.g. RELIANCE, TCS, AAPL, MSFT…"
+            autoFocus
           />
           <button type="submit" disabled={loading}>
-            {loading ? 'Fetching…' : 'Search'}
+            {loading ? 'Searching…' : 'Search'}
           </button>
         </form>
-        <div className="segmented" style={{ marginTop: 16 }}>
-          <button className={market === 'in' ? 'active' : ''} onClick={() => switchMarket('in')}>
-            IN &middot; {market === 'in' ? ticker : 'RELIANCE'}
-          </button>
-          <button className={market === 'us' ? 'active' : ''} onClick={() => switchMarket('us')}>
-            US &middot; {market === 'us' ? ticker : 'AAPL'}
-          </button>
-        </div>
       </div>
 
       {error && (
@@ -595,7 +707,11 @@ export function SearchProfile() {
 
       {loading && (
         <div className="section" style={{ marginTop: 32 }}>
-          <p className="hero-sub">Fetching live {market === 'in' ? 'NSE' : 'US'} data for {ticker}…</p>
+          <p className="hero-sub">
+            {searchingMarket === 'us'
+              ? `Not on NSE — checking US markets for ${ticker}…`
+              : `Searching for ${ticker}…`}
+          </p>
         </div>
       )}
 
@@ -611,13 +727,9 @@ export function SearchProfile() {
                     {profile.close_price?.toFixed(2) ?? '—'}
                   </div>
                   <div className="tags">
+                    <Pill kind="neutral">{market === 'in' ? 'NSE · India' : 'US Market'}</Pill>
                     {qualityPill(profile.data_quality)}
                     <Pill kind="neutral">{profile.checklist.sector_pack} pack</Pill>
-                    {profile.buy_signal.signal === 'BUY' ? (
-                      <Pill kind="open">Buyable</Pill>
-                    ) : (
-                      <Pill kind="neutral">{profile.buy_signal.signal.replace('_', ' ')}</Pill>
-                    )}
                     {profile.active_position && <Pill kind="win">In position</Pill>}
                   </div>
                 </div>
@@ -655,6 +767,12 @@ export function SearchProfile() {
               </div>
             </div>
           </div>
+
+          {!profile.active_position && (
+            <div className="section">
+              <VerdictBanner profile={profile} />
+            </div>
+          )}
 
           <div className="section">
             <div className="section-head">
