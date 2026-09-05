@@ -1007,6 +1007,13 @@ td.ticker {
   overflow: hidden;
   transition: transform 0.2s, border-color 0.2s, box-shadow 0.2s;
   box-shadow: 0 20px 60px -20px rgba(0, 0, 0, 0.5);
+  /* This is a <button>, and buttons don't inherit page text color the way
+     a div does — every browser's UA stylesheet gives it its own default
+     (buttontext, effectively black), so anything inside that doesn't set
+     its own color falls back to black-on-dark-card and disappears. Found
+     live: both the win-rate .stat and the h3 title were doing exactly
+     this. One fix at the button root, rather than patching every child. */
+  color: var(--text);
 }
 .ft-card:hover {
   transform: translateY(-3px);
@@ -1925,6 +1932,7 @@ td.ticker {
   color: var(--loss);
 }
 .trade-success-banner {
+  position: relative;
   margin-top: 16px;
   padding: 18px 20px;
   border-radius: 14px;
@@ -1947,6 +1955,9 @@ td.ticker {
   font-size: 17px;
   font-weight: 700;
   flex-shrink: 0;
+  position: relative;
+  z-index: 2;
+  animation: cosmicIconPop 0.5s cubic-bezier(0.34, 1.56, 0.64, 1) both;
 }
 .trade-success-body {
   flex: 1;
@@ -1998,6 +2009,169 @@ td.ticker {
 .trade-success-banner.loss .trade-success-title {
   color: var(--loss);
 }
+
+/* ---------- verdict banner (BUY / WAIT / AVOID) ---------- */
+.verdict-banner {
+  border-radius: var(--radius-lg);
+  padding: 20px 26px;
+  display: flex;
+  align-items: center;
+  gap: 22px;
+  flex-wrap: wrap;
+  border: 1px solid transparent;
+}
+.verdict-main {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  min-width: 130px;
+}
+.verdict-label {
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: 34px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  line-height: 1.1;
+}
+.verdict-sub {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-top: 2px;
+}
+.verdict-reason {
+  font-size: 13.5px;
+  line-height: 1.5;
+  color: var(--text-dim);
+  flex: 1;
+  min-width: 220px;
+  border-left: 1px solid var(--border-2);
+  padding-left: 22px;
+}
+.verdict-buy {
+  background: var(--gain-dim);
+  border-color: rgba(111, 207, 151, 0.35);
+}
+.verdict-buy .verdict-label,
+.verdict-buy .verdict-sub {
+  color: var(--gain);
+}
+.verdict-wait {
+  background: var(--warn-dim);
+  border-color: rgba(224, 168, 61, 0.35);
+}
+.verdict-wait .verdict-label,
+.verdict-wait .verdict-sub {
+  color: var(--warn);
+}
+.verdict-avoid {
+  background: var(--loss-dim);
+  border-color: rgba(232, 130, 122, 0.35);
+}
+.verdict-avoid .verdict-label,
+.verdict-avoid .verdict-sub {
+  color: var(--loss);
+}
+
+/* ---------- cosmic burst — Add-to-Forward-Test celebration ---------- */
+.cosmic-burst {
+  position: absolute;
+  top: 34px;
+  left: 34px;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+  z-index: 1;
+}
+.cosmic-shockwave {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 34px;
+  height: 34px;
+  margin: -17px 0 0 -17px;
+  border-radius: 50%;
+  border: 2px solid var(--gold);
+  animation: cosmicShockwave 0.7s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+.cosmic-particle {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: var(--size);
+  height: var(--size);
+  margin: calc(var(--size) / -2) 0 0 calc(var(--size) / -2);
+  border-radius: 50%;
+  background: var(--gold);
+  box-shadow: 0 0 4px 1px rgba(228, 183, 92, 0.8);
+  animation: cosmicParticle var(--duration) var(--delay) cubic-bezier(0.22, 0.61, 0.36, 1) both;
+}
+.cosmic-particle.streak {
+  width: calc(var(--size) * 6);
+  height: 1.5px;
+  margin-top: -0.75px;
+  border-radius: 2px;
+  background: linear-gradient(90deg, var(--gold), transparent);
+  box-shadow: none;
+  transform-origin: left center;
+  transform: rotate(var(--angle));
+  animation-name: cosmicStreak;
+}
+@keyframes cosmicIconPop {
+  0% {
+    transform: scale(0.3);
+    opacity: 0;
+  }
+  60% {
+    transform: scale(1.15);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+@keyframes cosmicShockwave {
+  0% {
+    transform: scale(0.4);
+    opacity: 0.9;
+  }
+  100% {
+    transform: scale(4.5);
+    opacity: 0;
+  }
+}
+@keyframes cosmicParticle {
+  0% {
+    transform: rotate(var(--angle)) translateX(0) scale(1);
+    opacity: 1;
+  }
+  100% {
+    transform: rotate(var(--angle)) translateX(var(--dist)) scale(0.3);
+    opacity: 0;
+  }
+}
+@keyframes cosmicStreak {
+  0% {
+    transform: rotate(var(--angle)) translateX(0) scaleX(0.3);
+    opacity: 1;
+  }
+  70% {
+    opacity: 1;
+  }
+  100% {
+    transform: rotate(var(--angle)) translateX(var(--dist)) scaleX(1);
+    opacity: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .cosmic-shockwave,
+  .cosmic-particle,
+  .trade-success-icon {
+    animation: none !important;
+  }
+}
+
 .trade-err-banner {
   margin-top: 16px;
   padding: 14px 18px;

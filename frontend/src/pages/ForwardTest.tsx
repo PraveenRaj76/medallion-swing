@@ -11,6 +11,17 @@ function fmtMoney(v: number, currency: string): string {
   return `${v >= 0 ? '+' : ''}${currency}${v.toFixed(2)}`
 }
 
+/** Win rate meaning depends entirely on the number, not on whether it's
+ * merely positive — a 45% win rate isn't "good" just because 45 > 0, and a
+ * 0.0% with zero closed trades yet isn't "bad", it's just no data. The
+ * previous `> 0 ? gain : (nothing)` logic conflated all three. */
+function winRateColor(pct: number, closedCount: number): string {
+  if (closedCount === 0) return 'var(--text-faint)'
+  if (pct >= 90) return 'var(--gain)'
+  if (pct < 60) return 'var(--loss)'
+  return 'var(--warn)'
+}
+
 function HubCard({
   market,
   data,
@@ -49,7 +60,9 @@ function HubCard({
           …
         </div>
       ) : (
-        <div className={`stat ${(data?.win_rate_pct ?? 0) > 0 ? 'gain' : ''}`}>{data?.win_rate_pct.toFixed(1) ?? '0.0'}%</div>
+        <div className="stat" style={{ color: winRateColor(data?.win_rate_pct ?? 0, data?.total_signals_tracked ?? 0) }}>
+          {data?.win_rate_pct.toFixed(1) ?? '0.0'}%
+        </div>
       )}
       <div className="statlabel">
         win rate &middot; {data?.total_signals_tracked ?? 0} closed test
@@ -139,7 +152,9 @@ function DetailView({
             </h1>
             <div className="northstar">
               <div>
-                <div className={`num mono ${data.win_rate_pct > 0 ? 'gain' : ''}`}>{data.win_rate_pct.toFixed(1)}%</div>
+                <div className="num mono" style={{ color: winRateColor(data.win_rate_pct, data.total_signals_tracked) }}>
+                  {data.win_rate_pct.toFixed(1)}%
+                </div>
                 <div className="label">
                   win rate · {data.total_signals_tracked} closed test{data.total_signals_tracked === 1 ? '' : 's'}
                 </div>
