@@ -561,6 +561,15 @@ def refresh_universe(tickers: Optional[List[str]] = None, max_workers: int = 8) 
             row["fundamental_score"] = card["fundamental"]["total_marks"]
             row["technical_score"] = card["technical"]["total_marks"]
             row["composite_score"] = card["composite_marks"]
+            # composite_pct was already being computed by full_us_factor_scorecard
+            # right here — just never carried into the row, so the bulk
+            # leaderboard only ever had the raw marks total to show, whose max
+            # varies by pack (financial vs not) and grew again this session
+            # when the 52-week-range and PE-vs-peers items were added. Showing
+            # that unbounded number in a plain "SCORE" column is what produced
+            # composite figures like 106.5 that look broken next to a bar
+            # already defensively capped at 100% width.
+            row["composite_pct"] = card["composite_pct"]
             row["is_buyable"] = (
                 1
                 if row["close_price"] > row["sma_200"] and row["rsi_14"] <= 65

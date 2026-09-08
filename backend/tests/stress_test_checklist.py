@@ -597,6 +597,40 @@ check(
     f"price_as_of={date_col_tech.get('price_as_of')!r}",
 )
 
+print("\n=== 17. Screener.in multi-line tag stripping (real broken-HTML-in-UI bug) ===")
+import re as _re
+
+_MULTILINE_H1 = (
+    '<span class="square bg-white border-radius-6"\n'
+    '              style="width: 36px;\n'
+    '                     height: 36px">\n'
+    '          <img src="https://cdn-media.screener.in/company-logos/thumbnails/x.webp"\n'
+    '               alt=""\n'
+    '               width="30"\n'
+    '               height="30"\n'
+    '               class="square object-fit-contain border-radius-4">\n'
+    "        </span>\n"
+    '        <span class="min-width-0 overflow-wrap-anywhere">IIFL Finance Ltd</span>'
+)
+
+
+def _strip_tags_as_shipped(raw: str) -> str:
+    """Mirrors the exact fixed expression used in both providers — a
+    regression test on the real behavior, not a reimplementation that
+    could quietly drift from what the source files actually do."""
+    return _re.sub(r"<.*?>", "", raw, flags=_re.S).strip()
+
+
+check(
+    "flags=re.S strips a real multi-line Screener.in logo <span>/<img> block cleanly",
+    _strip_tags_as_shipped(_MULTILINE_H1) == "IIFL Finance Ltd",
+    f"got {_strip_tags_as_shipped(_MULTILINE_H1)!r}",
+)
+check(
+    "Without DOTALL the same input reproduces the real bug (raw HTML leaks through)",
+    _re.sub(r"<.*?>", "", _MULTILINE_H1).strip() != "IIFL Finance Ltd",
+)
+
 print("\n" + "=" * 60)
 print(f"STRESS TEST SUMMARY: {PASS}/{PASS + FAIL} PASSED | {FAIL} FAILED")
 if FINDINGS:

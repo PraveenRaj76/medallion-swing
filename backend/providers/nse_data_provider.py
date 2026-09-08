@@ -572,8 +572,8 @@ def fetch_fundamentals_screener(ticker: str) -> Dict[str, Any]:
         re.S,
     )
     for name_html, val_html in items:
-        name = re.sub(r"<.*?>", "", name_html).strip().lower()
-        val = re.sub(r"\s+", " ", re.sub(r"<.*?>", "", val_html)).strip()
+        name = re.sub(r"<.*?>", "", name_html, flags=re.S).strip().lower()
+        val = re.sub(r"\s+", " ", re.sub(r"<.*?>", "", val_html, flags=re.S)).strip()
         num = _parse_number(val)
         if num is None:
             continue
@@ -618,7 +618,12 @@ def fetch_fundamentals_screener(ticker: str) -> Dict[str, Any]:
     title = None
     m_title = re.search(r"<h1[^>]*>\s*(.*?)\s*</h1>", html, re.I | re.S)
     if m_title:
-        title = re.sub(r"<.*?>", "", m_title.group(1)).strip()
+        # flags=re.S is load-bearing — see multi_source_data.fetch_screener's
+        # identical fix for why (Screener.in's h1 wraps a multi-line logo
+        # <span>/<img> block; without DOTALL, "." can't cross those
+        # newlines, so <.*?> silently failed to strip them and the raw
+        # HTML leaked straight into this title).
+        title = re.sub(r"<.*?>", "", m_title.group(1), flags=re.S).strip()
         title = re.sub(r"\s+", " ", title)
         # strip share price suffix
         title = re.sub(r"\s+share price.*$", "", title, flags=re.I).strip()
@@ -630,7 +635,7 @@ def fetch_fundamentals_screener(ticker: str) -> Dict[str, Any]:
         re.I | re.S,
     )
     if m_about:
-        desc = re.sub(r"<.*?>", "", m_about.group(1))
+        desc = re.sub(r"<.*?>", "", m_about.group(1), flags=re.S)
         desc = re.sub(r"\s+", " ", desc).strip()[:320]
 
     # PEG ≈ PE / growth when growth > 0
@@ -922,6 +927,17 @@ def build_live_row(
     row["fundamental_score"] = _score_fundamental(row)
     row["technical_score"] = _score_technical(row) if ohlcv_ready else 0.0
     row["composite_score"] = round(float(row["fundamental_score"]) + float(row["technical_score"]), 1)
+    # See the matching note in data_pipeline._build_price_row_from_live —
+    # max_marks depends only on sector_pack classification, safe/cheap to
+    # compute regardless of data quality, and is what lets composite_pct
+    # (the actual 0-100 figure, unlike the raw marks total whose max varies
+    # by pack) exist for this row at all.
+    from engine import factor_engine as _fe
+
+    _fund_max = float(_fe.evaluate_fundamental_checklist(row)["max_marks"])
+    _tech_max = float(_fe.evaluate_technical_checklist(row)["max_marks"]) if ohlcv_ready else 0.0
+    _composite_max = _fund_max + _tech_max
+    row["composite_pct"] = round(row["composite_score"] / _composite_max * 100.0, 1) if _composite_max else None
     row["is_buyable"] = (
         1
         if ohlcv_ready

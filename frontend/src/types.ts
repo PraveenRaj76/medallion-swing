@@ -64,6 +64,20 @@ export interface Quote {
   price_as_of: string | null
   is_stale: boolean | null
   days_stale: number | null
+  price_cross_check: PriceCrossCheck | null
+}
+
+/** Only populated for India, and only when a second, genuinely independent
+ * live price source (Angel One) actually answered — fundamentals mostly
+ * have just one free source (Screener.in), so there's no equivalent
+ * cross-check to fabricate there. */
+export interface PriceCrossCheck {
+  primary_source: string
+  primary_price: number
+  secondary_source: string
+  secondary_price: number
+  diff_pct: number | null
+  agrees: boolean
 }
 
 export interface TradeLevels {
@@ -127,6 +141,10 @@ export interface ScreenerRow {
   sector: string
   industry: string
   composite_score: number | null
+  /** 0-100 normalized (fundamental+technical marks over their combined
+   * max) — use this for display/sort, not composite_score, whose max
+   * varies by sector pack and market so the raw number can exceed 100. */
+  composite_pct: number | null
   fundamental_score: number | null
   technical_score: number | null
   close_price: number | null

@@ -49,7 +49,20 @@ def _build_quote(row: Dict[str, Any], market: str, ticker: str) -> Dict[str, Any
         "price_as_of": row.get("price_as_of"),
     }
 
+    quote["price_cross_check"] = None
     if market == "IN":
+        # The one place two genuinely independent LIVE price sources exist
+        # in this app: Yahoo's OHLCV close (already in `close` above) and
+        # Angel One's own live tick. Previously this just silently preferred
+        # Angel One whenever it answered, with no check that the two
+        # actually agreed — meaning a bug or stale cache on either side
+        # could hand the user a wrong number with the same confident "LIVE"
+        # label as a correct one. Recorded as a real cross-check result
+        # rather than fabricated: fundamentals mostly have only one free
+        # source (Screener.in) to check against, so this is scoped to what
+        # genuinely has a second source, not a blanket "multi-source"
+        # claim across fields that don't have one.
+        ohlcv_price = close
         try:
             from providers import live_price_feed as lpf
 
@@ -57,9 +70,10 @@ def _build_quote(row: Dict[str, Any], market: str, ticker: str) -> Dict[str, Any
         except Exception:
             live = {"ok": False}
         if live.get("ok"):
+            live_price = live.get("close_price")
             quote.update(
                 {
-                    "price": live.get("close_price", quote["price"]),
+                    "price": live_price if live_price is not None else quote["price"],
                     "prev_close": live.get("prev_close", quote["prev_close"]),
                     "open": live.get("open", quote["open"]),
                     "day_high": live.get("day_high", quote["day_high"]),
@@ -70,6 +84,28 @@ def _build_quote(row: Dict[str, Any], market: str, ticker: str) -> Dict[str, Any
                     "fetched_at": live.get("fetched_at"),
                 }
             )
+            if ohlcv_price is not None and live_price is not None:
+                try:
+                    ohlcv_price_f = float(ohlcv_price)
+                    live_price_f = float(live_price)
+                    diff_pct = (
+                        abs(live_price_f - ohlcv_price_f) / ohlcv_price_f * 100.0
+                        if ohlcv_price_f
+                        else None
+                    )
+                    quote["price_cross_check"] = {
+                        "primary_source": quote["source"] or "angel_one",
+                        "primary_price": round(live_price_f, 2),
+                        "secondary_source": "yahoo",
+                        "secondary_price": round(ohlcv_price_f, 2),
+                        "diff_pct": round(diff_pct, 2) if diff_pct is not None else None,
+                        # >1.5% apart between two live quotes on the same
+                        # exchange is a real disagreement worth flagging,
+                        # not routine timing noise between two feeds.
+                        "agrees": diff_pct is not None and diff_pct <= 1.5,
+                    }
+                except (TypeError, ValueError):
+                    quote["price_cross_check"] = None
 
     if quote["price"] is not None and quote["prev_close"]:
         try:

@@ -191,8 +191,8 @@ def fetch_screener(ticker: str) -> Dict[str, Any]:
             re.S,
         )
         for name_html, val_html in items:
-            name = re.sub(r"<.*?>", "", name_html).strip().lower()
-            val = re.sub(r"\s+", " ", re.sub(r"<.*?>", "", val_html)).strip()
+            name = re.sub(r"<.*?>", "", name_html, flags=re.S).strip().lower()
+            val = re.sub(r"\s+", " ", re.sub(r"<.*?>", "", val_html, flags=re.S)).strip()
             num = _num(val)
             if num is not None:
                 ratios[name] = num
@@ -247,13 +247,21 @@ def fetch_screener(ticker: str) -> Dict[str, Any]:
 
     m_title = re.search(r"<h1[^>]*>\s*(.*?)\s*</h1>", html, re.I | re.S)
     if m_title:
-        title = re.sub(r"<.*?>", "", m_title.group(1)).strip()
+        # flags=re.S is load-bearing here, not decorative: Screener.in's h1
+        # now wraps a multi-line logo <span>/<img> block ahead of the real
+        # name (confirmed live against IIFL's actual page) — without
+        # DOTALL, "." can't cross the newlines inside that block's own
+        # opening tags, so <.*?> silently fails to match them at all and
+        # the raw HTML fell straight through into company_name. Reproduced
+        # and confirmed fixed against IIFL's real response before applying
+        # this everywhere the same pattern appears (both files).
+        title = re.sub(r"<.*?>", "", m_title.group(1), flags=re.S).strip()
         title = re.sub(r"\s+", " ", title)
         out["company_name"] = re.sub(r"\s+share price.*$", "", title, flags=re.I).strip()
 
     m_about = re.search(r'<div class="about"[^>]*>.*?<p[^>]*>(.*?)</p>', html, re.I | re.S)
     if m_about:
-        out["description"] = re.sub(r"\s+", " ", re.sub(r"<.*?>", "", m_about.group(1))).strip()[:320]
+        out["description"] = re.sub(r"\s+", " ", re.sub(r"<.*?>", "", m_about.group(1), flags=re.S)).strip()[:320]
 
     if out.get("close_price") and out.get("book_value"):
         try:

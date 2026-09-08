@@ -129,6 +129,21 @@ function QuoteHero({ profile, currency }: { profile: ProfileResponse; currency: 
                 : `Not today’s price — ${q.days_stale} sessions behind`}
             </div>
           )}
+          {q.price_cross_check &&
+            (q.price_cross_check.agrees ? (
+              <div className="quote-check-badge ok" title={`${q.price_cross_check.secondary_source.toUpperCase()} ${currency}${q.price_cross_check.secondary_price.toFixed(2)}`}>
+                Cross-checked against {q.price_cross_check.secondary_source.toUpperCase()} — agree within{' '}
+                {q.price_cross_check.diff_pct?.toFixed(2) ?? '0.00'}%
+              </div>
+            ) : (
+              <div className="quote-check-badge warn">
+                Price sources disagree: {q.price_cross_check.primary_source.toUpperCase()} {currency}
+                {q.price_cross_check.primary_price.toFixed(2)} vs {q.price_cross_check.secondary_source.toUpperCase()}{' '}
+                {currency}
+                {q.price_cross_check.secondary_price.toFixed(2)} ({q.price_cross_check.diff_pct?.toFixed(1) ?? '?'}%
+                apart) — verify before trusting this
+              </div>
+            ))}
         </div>
       </div>
       <div className="quote-stats">
