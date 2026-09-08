@@ -90,7 +90,7 @@ export function ScreenerUS() {
       case 'sector':
         return row.sector || ''
       case 'score':
-        return row.composite_score ?? -1
+        return row.composite_pct ?? -1
       case 'fund':
         return row.fundamental_score ?? -1
       case 'tech':
@@ -101,7 +101,10 @@ export function ScreenerUS() {
   }
   const { sorted, toggle, arrow } = useSort(filtered, getVal, 'score', 'desc')
 
-  const scores = rows.map((r) => r.composite_score).filter((v): v is number => typeof v === 'number')
+  // composite_pct (0-100 normalized) — see ScreenerIndia.tsx's identical
+  // note; composite_score's own max varies by pack/market so it can
+  // legitimately exceed 100.
+  const scores = rows.map((r) => r.composite_pct).filter((v): v is number => typeof v === 'number')
   const buyableCount = rows.filter((r) => r.is_buyable).length
 
   return (
@@ -186,7 +189,7 @@ export function ScreenerUS() {
               <div className="kpi-val">
                 <CountUp value={median(scores)} decimals={1} />
               </div>
-              <div className="kpi-foot">composite, out of ~104</div>
+              <div className="kpi-foot">composite, 0–100%</div>
             </div>
           </div>
 
@@ -276,12 +279,12 @@ export function ScreenerUS() {
                           </td>
                           <td>{row.sector}</td>
                           <td className="num">
-                            {row.composite_score != null && (
+                            {row.composite_pct != null && (
                               <span className="barwrap">
-                                <span className="bar" style={{ width: `${Math.min(100, row.composite_score)}%` }} />
+                                <span className="bar" style={{ width: `${Math.min(100, Math.max(0, row.composite_pct))}%` }} />
                               </span>
                             )}
-                            {row.composite_score?.toFixed(1) ?? '—'}
+                            {row.composite_pct != null ? `${row.composite_pct.toFixed(1)}%` : '—'}
                           </td>
                           <td>
                             <TrendBadge

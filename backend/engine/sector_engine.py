@@ -229,7 +229,10 @@ def compute_sector_rankings(market: str = "IN") -> Dict[str, Any]:
     for sector, grp in stock_groups:
         n = len(grp)
         buyable_n = int(grp["is_buyable"].fillna(0).astype(int).sum()) if "is_buyable" in grp else 0
-        composite = pd.to_numeric(grp.get("composite_score"), errors="coerce").tolist()
+        # composite_pct (0-100 normalized), not composite_score — see
+        # data_pipeline.py's notes on why the raw marks total's own max
+        # varies by sector pack/market and can legitimately exceed 100.
+        composite = pd.to_numeric(grp.get("composite_pct"), errors="coerce").tolist()
         pe = pd.to_numeric(grp.get("pe_ratio"), errors="coerce").tolist()
         peg = pd.to_numeric(grp.get("peg_ratio"), errors="coerce").tolist()
         fundamental = pd.to_numeric(grp.get("fundamental_score"), errors="coerce").tolist()

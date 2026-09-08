@@ -1,16 +1,19 @@
+import { useState } from 'react'
 import { NavLink } from 'react-router-dom'
 import { MedallionLogo } from './MedallionLogo'
 import { UserProfileMenu } from './UserProfileMenu'
+import { AboutModal } from './AboutModal'
 
-export function Nav({ onOpenCmdk }: { onOpenCmdk: () => void }) {
+export function Nav() {
   const linkClass = ({ isActive }: { isActive: boolean }) => (isActive ? 'active' : '')
+  const [aboutOpen, setAboutOpen] = useState(false)
 
   return (
     <nav>
-      <div className="brand">
+      <button className="brand" onClick={() => setAboutOpen(true)} aria-label="About Medallion Swing">
         <MedallionLogo size={34} variant="icon" />
         <span>MEDALLION SWING</span>
-      </div>
+      </button>
       <div className="navlinks" role="tablist" aria-label="Pages">
         <NavLink to="/screener/in" className={linkClass}>
           India Screener
@@ -26,14 +29,8 @@ export function Nav({ onOpenCmdk }: { onOpenCmdk: () => void }) {
         </NavLink>
       </div>
       <div className="navspacer" />
-      <button className="cmdk-trigger" onClick={onOpenCmdk}>
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-          <circle cx="11" cy="11" r="7" />
-          <path d="m21 21-4.3-4.3" />
-        </svg>
-        <span className="cmdk-label">Jump to&hellip;</span> <span className="kbd">Ctrl K</span>
-      </button>
       <UserProfileMenu />
+      {aboutOpen && <AboutModal onClose={() => setAboutOpen(false)} />}
     </nav>
   )
 }

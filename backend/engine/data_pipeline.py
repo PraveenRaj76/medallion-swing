@@ -147,6 +147,15 @@ def refresh_screener_quotes(
                         float(row.get("fundamental_score") or 0) + float(row["technical_score"]),
                         1,
                     )
+                    # This is the fast, fundamentals-skipping refresh path —
+                    # fundamental_max isn't cheaply known here the way it is
+                    # in the full paths (evaluate_fundamental_checklist needs
+                    # the fundamentals fields this path deliberately doesn't
+                    # re-fetch), so carry composite_pct forward from the last
+                    # full refresh rather than computing a wrong one; it gets
+                    # properly refreshed the next time a full refresh runs.
+                    if prior.get("composite_pct") is not None:
+                        row["composite_pct"] = prior.get("composite_pct")
                 merged.append(row)
             rows = merged
 
@@ -684,6 +693,21 @@ def _build_price_row_from_live(
         "prev_close": quote.get("prev_close") if quote.get("prev_close") is not None else prior.get("prev_close"),
         "ohlcv_ready": bool(has_ohlcv),
     }
+    # max_marks (unlike total_marks) only depends on sector_pack/financial
+    # classification, never on whether the values themselves are verified —
+    # safe and cheap (pure, no network I/O) to compute every time, which is
+    # what actually lets composite_pct exist here at all. Previously this
+    # block only kept total_marks (via nse._score_fundamental/_technical,
+    # which discard everything else the checklist functions return), so the
+    # bulk leaderboard had no normalized percentage to show — only the raw
+    # marks sum, whose max varies by pack and grew again this session (the
+    # 52-week-range + PE-vs-peers items), producing composite numbers over
+    # 100 that looked broken next to a progress bar already defensively
+    # capped at 100% width.
+    from engine import factor_engine as factors
+
+    fund_max = float(factors.evaluate_fundamental_checklist(row)["max_marks"])
+    tech_max = float(factors.evaluate_technical_checklist(row)["max_marks"]) if has_ohlcv else 0.0
     try:
         row["fundamental_score"] = float(prior.get("fundamental_score") or 0)
         if prior.get("fundamentals_verified"):
@@ -698,6 +722,8 @@ def _build_price_row_from_live(
     row["composite_score"] = round(
         float(row["fundamental_score"]) + float(row["technical_score"]), 1
     )
+    composite_max = fund_max + tech_max
+    row["composite_pct"] = round(row["composite_score"] / composite_max * 100.0, 1) if composite_max else None
     row["is_buyable"] = (
         1
         if has_ohlcv

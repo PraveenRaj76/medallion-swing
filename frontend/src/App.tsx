@@ -1,9 +1,8 @@
-import { useEffect, useState, type ReactNode } from 'react'
+import { type ReactNode } from 'react'
 import { Navigate, Route, Routes } from 'react-router-dom'
 import './App.css'
 import { Nav } from './components/Nav'
 import { Starfield } from './components/Starfield'
-import { CommandPalette } from './components/CommandPalette'
 import { useAuth } from './context/AuthContext'
 import { Login } from './pages/Login'
 import { ScreenerIndia } from './pages/ScreenerIndia'
@@ -13,25 +12,12 @@ import { ForwardTest } from './pages/ForwardTest'
 
 function Protected({ children }: { children: ReactNode }) {
   const { userId } = useAuth()
-  const [cmdkOpen, setCmdkOpen] = useState(false)
-
-  useEffect(() => {
-    function onKey(e: KeyboardEvent) {
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
-        e.preventDefault()
-        setCmdkOpen(true)
-      }
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [])
 
   if (!userId) return <Navigate to="/login" replace />
   return (
     <div className="wrap">
-      <Nav onOpenCmdk={() => setCmdkOpen(true)} />
+      <Nav />
       {children}
-      <CommandPalette open={cmdkOpen} onClose={() => setCmdkOpen(false)} />
     </div>
   )
 }

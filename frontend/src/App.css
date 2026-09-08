@@ -24,6 +24,21 @@ nav {
   align-items: center;
   gap: 10px;
   flex-shrink: 0;
+  /* Now a <button> (opens the About modal) — resets needed since native
+     buttons don't inherit page color/font/background the way a div does
+     (see .ft-card's identical fix elsewhere in this file: an unset button
+     color silently defaults to black on a dark card). */
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  transition: opacity 0.15s;
+}
+.brand:hover {
+  opacity: 0.85;
 }
 .brand span {
   font-family: 'Space Grotesk', sans-serif;
@@ -76,31 +91,6 @@ nav {
 }
 .navspacer {
   flex: 1;
-}
-.cmdk-trigger {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  padding: 8px 12px;
-  color: var(--text-faint);
-  font-size: 12.5px;
-  transition: border-color 0.2s, color 0.2s;
-}
-.cmdk-trigger:hover {
-  border-color: var(--border-2);
-  color: var(--text-dim);
-}
-.kbd {
-  font-family: 'JetBrains Mono', monospace;
-  font-size: 10.5px;
-  background: var(--surface-3);
-  border: 1px solid var(--border);
-  border-radius: 5px;
-  padding: 2px 6px;
-  color: var(--text-dim);
 }
 .user {
   font-size: 12px;
@@ -265,12 +255,6 @@ nav {
     display: none;
   }
 }
-@media (max-width: 480px) {
-  .cmdk-label {
-    display: none;
-  }
-}
-
 /* HERO */
 .hero {
   padding: 56px 0 40px;
@@ -1087,94 +1071,109 @@ td.ticker {
   font-style: italic;
 }
 
-/* COMMAND PALETTE */
-.cmdk-backdrop {
+/* ABOUT MODAL — opens from clicking the logo/brand in the nav */
+.about-modal-backdrop {
   position: fixed;
   inset: 0;
   z-index: 50;
-  background: rgba(5, 7, 13, 0.7);
-  backdrop-filter: blur(4px);
+  background: rgba(5, 7, 13, 0.75);
+  backdrop-filter: blur(6px);
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: center;
-  padding-top: 12vh;
+  padding: 24px;
 }
-.cmdk {
+.about-modal {
   width: 100%;
-  max-width: 560px;
+  max-width: 480px;
+  max-height: 85vh;
+  overflow-y: auto;
   background: var(--bg-2);
   border: 1px solid var(--border-2);
   border-radius: var(--radius-lg);
   box-shadow: 0 40px 100px -20px rgba(0, 0, 0, 0.7);
-  overflow: hidden;
+  padding: 36px 32px 30px;
+  text-align: center;
+  position: relative;
+  animation: aboutModalIn 0.25s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
-.cmdk-input-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 16px 18px;
-  border-bottom: 1px solid var(--border);
+@keyframes aboutModalIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
 }
-.cmdk-input-row svg {
-  flex-shrink: 0;
-  opacity: 0.5;
-}
-.cmdk-input-row input {
-  flex: 1;
-  background: none;
-  border: none;
-  color: var(--text);
-  font-size: 15px;
-  font-family: 'Inter', sans-serif;
-}
-.cmdk-input-row input::placeholder {
-  color: var(--text-faint);
-}
-.cmdk-list {
-  max-height: 340px;
-  overflow-y: auto;
-  padding: 8px;
-}
-.cmdk-group {
-  font-size: 10.5px;
-  text-transform: uppercase;
-  letter-spacing: 0.6px;
-  color: var(--text-faint);
-  padding: 10px 12px 6px;
-}
-.cmdk-item {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 10px 12px;
-  border-radius: 10px;
-  font-size: 13.5px;
+.about-modal-close {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: var(--surface-3);
   color: var(--text-dim);
-  cursor: pointer;
-}
-.cmdk-item .l {
   display: flex;
   align-items: center;
-  gap: 10px;
+  justify-content: center;
+  font-size: 16px;
+  line-height: 1;
+  transition: background 0.15s, color 0.15s;
 }
-.cmdk-item .tag {
-  font-size: 10.5px;
-  color: var(--text-faint);
-  font-family: 'JetBrains Mono', monospace;
-}
-.cmdk-item.active {
-  background: var(--gold-dim);
+.about-modal-close:hover {
+  background: var(--surface-4);
   color: var(--text);
 }
-.cmdk-item.active .tag {
+.about-modal-name {
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  margin-top: 18px;
   color: var(--gold);
 }
-.cmdk-empty {
-  padding: 24px;
-  text-align: center;
+.about-modal-tagline {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
   color: var(--text-faint);
+  margin-top: 4px;
+}
+.about-modal-body {
+  text-align: left;
+  margin-top: 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.about-modal-row-label {
+  font-size: 10.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--gold-soft);
+  margin-bottom: 4px;
+}
+.about-modal-row p {
   font-size: 13px;
+  line-height: 1.6;
+  color: var(--text-dim);
+  margin: 0;
+}
+.about-modal-quote {
+  margin-top: 22px;
+  padding-top: 18px;
+  border-top: 1px solid var(--border);
+  font-size: 12.5px;
+  font-style: italic;
+  color: var(--text-faint);
+}
+.about-modal-quote b {
+  color: var(--gold);
+  font-style: normal;
 }
 
 /* LOGIN */
@@ -1743,6 +1742,36 @@ td.ticker {
   font-family: 'JetBrains Mono', monospace;
 }
 .quote-stale-badge::before {
+  content: '⚠';
+  font-size: 12px;
+}
+.quote-check-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  padding: 5px 10px;
+  border-radius: var(--radius-sm);
+  font-size: 11.5px;
+  font-weight: 600;
+  font-family: 'JetBrains Mono', monospace;
+  max-width: 100%;
+}
+.quote-check-badge.ok {
+  background: var(--gain-dim);
+  color: var(--gain);
+}
+.quote-check-badge.ok::before {
+  content: '✓';
+  font-size: 12px;
+}
+.quote-check-badge.warn {
+  background: var(--loss-dim);
+  color: var(--loss);
+  white-space: normal;
+  line-height: 1.4;
+}
+.quote-check-badge.warn::before {
   content: '⚠';
   font-size: 12px;
 }

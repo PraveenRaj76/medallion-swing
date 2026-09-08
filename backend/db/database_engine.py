@@ -647,6 +647,16 @@ def _ensure_leaderboard_extra_columns(cursor: sqlite3.Cursor) -> None:
         # is what lets the UI show "price as of <date>" instead of
         # implying every "LIVE"/"LAST" price is necessarily today's.
         "price_as_of": "TEXT",
+        # The real 0-100 composite score (fundamental+technical marks over
+        # their combined max) — NOT the same thing as composite_score
+        # (raw marks, unbounded, whose max varies by sector pack and by
+        # market). composite_score alone in a plain "SCORE" column read as
+        # broken once it could exceed 100 (found live: 106.5 next to a
+        # progress bar already defensively capped at 100% width). NULL for
+        # any row saved before this migration, or by the fast/mock refresh
+        # paths that don't cheaply know fundamental_max — see
+        # data_pipeline.py's callers for exactly which paths set this.
+        "composite_pct": "REAL",
     }
     for name, decl in additions.items():
         if name not in cols:
@@ -1246,6 +1256,15 @@ def upsert_leaderboard_rows(rows: List[Dict[str, Any]]) -> bool:
                     week52_low = None
                 price_as_of = row.get("price_as_of")
                 price_as_of = str(price_as_of) if price_as_of else None
+                composite_pct = row.get("composite_pct")
+                try:
+                    composite_pct = (
+                        float(composite_pct)
+                        if composite_pct is not None and pd.notna(composite_pct)
+                        else None
+                    )
+                except (TypeError, ValueError):
+                    composite_pct = None
                 cursor.execute(
                     """
                     INSERT INTO screener_leaderboard (
@@ -1257,8 +1276,8 @@ def upsert_leaderboard_rows(rows: List[Dict[str, Any]]) -> bool:
                         rsi_14, delivery_pct_10d, alpha_3m,
                         pe_ratio, pb_ratio, roe, data_quality, fundamentals_verified, sources_ok_count,
                         ohlcv_ready, price_source, price_kind, prev_close, market, pe_peer_percentile,
-                        week52_high, week52_low, price_as_of
-                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                        week52_high, week52_low, price_as_of, composite_pct
+                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                     ON CONFLICT(ticker) DO UPDATE SET
                         company_name=excluded.company_name,
                         description=excluded.description,
@@ -1296,7 +1315,8 @@ def upsert_leaderboard_rows(rows: List[Dict[str, Any]]) -> bool:
                         pe_peer_percentile=COALESCE(excluded.pe_peer_percentile, screener_leaderboard.pe_peer_percentile),
                         week52_high=COALESCE(excluded.week52_high, screener_leaderboard.week52_high),
                         week52_low=COALESCE(excluded.week52_low, screener_leaderboard.week52_low),
-                        price_as_of=excluded.price_as_of
+                        price_as_of=excluded.price_as_of,
+                        composite_pct=COALESCE(excluded.composite_pct, screener_leaderboard.composite_pct)
                     """,
                     (
                         row["ticker"], row.get("company_name", row["ticker"]),
@@ -1325,6 +1345,7 @@ def upsert_leaderboard_rows(rows: List[Dict[str, Any]]) -> bool:
                         week52_high,
                         week52_low,
                         price_as_of,
+                        composite_pct,
                     ),
                 )
         return True
