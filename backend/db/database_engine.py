@@ -1214,6 +1214,18 @@ def get_sector_pe_history(market: str, sector: str, limit_days: int = 365) -> pd
         return pd.DataFrame()
 
 
+def _safe_float(v: Any) -> Optional[float]:
+    """None/NaN-safe float coercion for a SQL REAL parameter — a raw
+    pandas NaN (e.g. from a Series read back via db.get_ticker_row, which
+    is not JSON-round-tripped to None the way series_to_dict output is)
+    would otherwise get written to SQLite as a literal NaN, corrupting any
+    AVG/median aggregate that later reads the column."""
+    try:
+        return float(v) if v is not None and pd.notna(v) else None
+    except (TypeError, ValueError):
+        return None
+
+
 def upsert_leaderboard_rows(rows: List[Dict[str, Any]]) -> bool:
     if not rows:
         return False
@@ -1230,41 +1242,23 @@ def upsert_leaderboard_rows(rows: List[Dict[str, Any]]) -> bool:
                 ohlcv = 1 if row.get("ohlcv_ready") else 0
                 price_source = str(row.get("price_source") or "")[:40] or None
                 price_kind = str(row.get("price_kind") or "")[:20] or None
-                prev_close = row.get("prev_close")
-                try:
-                    prev_close = float(prev_close) if prev_close is not None else None
-                except (TypeError, ValueError):
-                    prev_close = None
-                pe_peer_percentile = row.get("pe_peer_percentile")
-                try:
-                    pe_peer_percentile = (
-                        float(pe_peer_percentile)
-                        if pe_peer_percentile is not None and pd.notna(pe_peer_percentile)
-                        else None
-                    )
-                except (TypeError, ValueError):
-                    pe_peer_percentile = None
-                week52_high = row.get("week52_high")
-                try:
-                    week52_high = float(week52_high) if week52_high is not None and pd.notna(week52_high) else None
-                except (TypeError, ValueError):
-                    week52_high = None
-                week52_low = row.get("week52_low")
-                try:
-                    week52_low = float(week52_low) if week52_low is not None and pd.notna(week52_low) else None
-                except (TypeError, ValueError):
-                    week52_low = None
+                prev_close = _safe_float(row.get("prev_close"))
+                pe_peer_percentile = _safe_float(row.get("pe_peer_percentile"))
+                week52_high = _safe_float(row.get("week52_high"))
+                week52_low = _safe_float(row.get("week52_low"))
                 price_as_of = row.get("price_as_of")
                 price_as_of = str(price_as_of) if price_as_of else None
-                composite_pct = row.get("composite_pct")
-                try:
-                    composite_pct = (
-                        float(composite_pct)
-                        if composite_pct is not None and pd.notna(composite_pct)
-                        else None
-                    )
-                except (TypeError, ValueError):
-                    composite_pct = None
+                composite_pct = _safe_float(row.get("composite_pct"))
+                # These six previously went straight from row.get(...) into the
+                # SQL params with no guard — a raw pandas NaN (see _safe_float's
+                # docstring) would be written to SQLite as a literal NaN,
+                # corrupting any later AVG/median over the column.
+                roic = _safe_float(row.get("roic"))
+                net_debt_ebitda = _safe_float(row.get("net_debt_ebitda"))
+                peg_ratio = _safe_float(row.get("peg_ratio"))
+                interest_coverage = _safe_float(row.get("interest_coverage"))
+                promoter_pledge_pct = _safe_float(row.get("promoter_pledge_pct"))
+                yoy_profit_growth = _safe_float(row.get("yoy_profit_growth"))
                 cursor.execute(
                     """
                     INSERT INTO screener_leaderboard (
@@ -1315,7 +1309,7 @@ def upsert_leaderboard_rows(rows: List[Dict[str, Any]]) -> bool:
                         pe_peer_percentile=COALESCE(excluded.pe_peer_percentile, screener_leaderboard.pe_peer_percentile),
                         week52_high=COALESCE(excluded.week52_high, screener_leaderboard.week52_high),
                         week52_low=COALESCE(excluded.week52_low, screener_leaderboard.week52_low),
-                        price_as_of=excluded.price_as_of,
+                        price_as_of=COALESCE(excluded.price_as_of, screener_leaderboard.price_as_of),
                         composite_pct=COALESCE(excluded.composite_pct, screener_leaderboard.composite_pct)
                     """,
                     (
@@ -1324,9 +1318,9 @@ def upsert_leaderboard_rows(rows: List[Dict[str, Any]]) -> bool:
                         row.get("composite_score", 0.0), row.get("fundamental_score", 0.0),
                         row.get("technical_score", 0.0), row.get("close_price", 0.0),
                         row.get("atr_value", 0.0), int(row.get("is_buyable", 0)), stamp,
-                        row.get("roic"), row.get("net_debt_ebitda"),
-                        row.get("peg_ratio"), row.get("interest_coverage"),
-                        row.get("promoter_pledge_pct"), row.get("yoy_profit_growth"),
+                        roic, net_debt_ebitda,
+                        peg_ratio, interest_coverage,
+                        promoter_pledge_pct, yoy_profit_growth,
                         row.get("sma_50", 0.0), row.get("sma_200", 0.0),
                         row.get("rsi_14", 50.0), row.get("delivery_pct_10d", 0.0),
                         row.get("alpha_3m", 0.0),

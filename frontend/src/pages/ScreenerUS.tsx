@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type CSSProperties } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { ApiError, getScreener, getSectors, postRefresh } from '../api/client'
+import { ApiError, getScreener, getSectors } from '../api/client'
 import type { ScreenerResponse, ScreenerRow, SectorsResponse } from '../types'
 import { useAuth } from '../context/AuthContext'
 import { qualityPill, Pill } from '../components/Pill'
@@ -11,6 +11,7 @@ import { CountUp } from '../components/CountUp'
 import { US_FUNDAMENTAL_EXPLAINERS, US_TECHNICAL_EXPLAINERS } from '../data/checklistExplainersUS'
 import { SECTOR_EXPLAINERS } from '../data/checklistExplainers'
 import { useSort } from '../hooks/useSort'
+import { formatEta, useRefreshJob } from '../hooks/useRefreshJob'
 
 function median(nums: number[]): number | null {
   if (!nums.length) return null
@@ -23,8 +24,6 @@ export function ScreenerUS() {
   const [view, setView] = useState<'leaderboard' | 'best-sector'>('leaderboard')
   const [data, setData] = useState<ScreenerResponse | null>(null)
   const [loading, setLoading] = useState(true)
-  const [refreshing, setRefreshing] = useState(false)
-  const [refreshMsg, setRefreshMsg] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [search, setSearch] = useState('')
   const [sectorFilter, setSectorFilter] = useState('')
@@ -49,23 +48,13 @@ export function ScreenerUS() {
     load()
   }, [])
 
-  async function handleRefresh() {
-    setRefreshing(true)
-    setError(null)
-    setRefreshMsg(null)
-    try {
-      const res = await postRefresh({ full_universe: true, market: 'US', user_id: userId ?? undefined })
-      setRefreshMsg((res as { message?: string }).message ?? null)
-      await load()
-    } catch (err) {
-      setError(
-        err instanceof ApiError
-          ? err.message
-          : 'Refresh timed out or failed — a full S&P 500 pull (SEC EDGAR + Yahoo Finance) can take several minutes; try again.',
-      )
-    } finally {
-      setRefreshing(false)
-    }
+  // Runs as a real background job on the server — see useRefreshJob. Clicking
+  // Refresh, then navigating to another page, no longer loses track of it:
+  // coming back to this page re-asks the server for the job's real status.
+  const refreshJob = useRefreshJob('US', load)
+  const refreshing = refreshJob.running
+  function handleRefresh() {
+    refreshJob.start({ full_universe: true, market: 'US', user_id: userId ?? undefined })
   }
 
   const rows = data?.data ?? []
@@ -138,14 +127,23 @@ export function ScreenerUS() {
         </div>
       </div>
 
-      {error && (
+      {(error || refreshJob.error) && (
         <div className="section" style={{ marginTop: 20 }}>
-          <div className="pill loss">{error}</div>
+          <div className="pill loss">{error || refreshJob.error}</div>
         </div>
       )}
-      {refreshMsg && !error && (
+      {refreshing && refreshJob.status && (
         <div className="section" style={{ marginTop: 20 }}>
-          <span className="pill info">{refreshMsg}</span>
+          <div className="pill" style={{ background: 'var(--gold-dim)', color: 'var(--gold)' }}>
+            {refreshJob.status.message}
+            {refreshJob.status.total > 0 && ` (${refreshJob.status.done}/${refreshJob.status.total})`}
+            {formatEta(refreshJob.status.eta_sec) && ` — ${formatEta(refreshJob.status.eta_sec)}`}
+          </div>
+        </div>
+      )}
+      {!refreshing && !error && refreshJob.status?.status === 'done' && (
+        <div className="section" style={{ marginTop: 20 }}>
+          <span className="pill info">{refreshJob.status.message}</span>
         </div>
       )}
 

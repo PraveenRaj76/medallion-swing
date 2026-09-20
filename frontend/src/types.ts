@@ -173,6 +173,20 @@ export interface ScreenerResponse {
   data: ScreenerRow[]
 }
 
+/** GET /api/refresh/status — server-side truth for whether a universe
+ * refresh is running, so the UI can recover this on mount regardless of
+ * which page (or browser tab) actually clicked "Refresh universe". */
+export interface RefreshStatus {
+  market: string
+  status: 'idle' | 'running' | 'done' | 'error'
+  done: number
+  total: number
+  message: string
+  elapsed_sec: number | null
+  eta_sec: number | null
+  error?: string | null
+}
+
 export interface SectorRow {
   sector: string
   gics_equivalent: string

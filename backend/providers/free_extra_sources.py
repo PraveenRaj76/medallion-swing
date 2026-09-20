@@ -25,6 +25,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from providers import _retry
+
 logger = logging.getLogger(__name__)
 
 # This file lives in backend/providers/ — cache files live in backend/data/,
@@ -98,8 +100,9 @@ def _get(url: str, referer: str, timeout: Optional[int] = None, session: Any = N
     from curl_cffi import requests as cr
 
     caller = session if session is not None else cr
-    try:
-        return caller.get(
+
+    def _attempt():
+        resp = caller.get(
             url,
             impersonate="chrome124",
             timeout=timeout or HTTP_TIMEOUT,
@@ -111,9 +114,11 @@ def _get(url: str, referer: str, timeout: Optional[int] = None, session: Any = N
                 "Referer": referer,
             },
         )
-    except Exception as exc:
-        logger.debug("free-extra GET failed %s: %s", url[:90], exc)
-        return None
+        if resp.status_code in _retry.RETRIABLE_STATUS_CODES:
+            raise RuntimeError(f"HTTP {resp.status_code}")
+        return resp
+
+    return _retry.retry_call(_attempt, label=f"free-extra GET {url[:70]}")
 
 
 def _json_body(resp: Any) -> Any:

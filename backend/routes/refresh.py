@@ -1,18 +1,23 @@
-"""POST /api/refresh, POST /api/trade, POST /api/trade/close.
+"""POST /api/refresh, GET /api/refresh/status, POST /api/trade, POST /api/trade/close.
 
-Thin wrappers over data_pipeline.refresh_verified_live() and the
-open_signal()/close_signal() pair in database_engine — no new business
-logic. Refresh runs synchronously; for the full 200-stock universe this can
-take a while, so point curl/React at it with a generous timeout for now.
-Job-queue polling (as sketched in PHASE_1_FASTAPI_STARTER.md) can follow
-once this round-trip is proven end to end.
+Refresh now runs as a background job (engine/refresh_jobs.py), not a single
+long-lived HTTP request — see that module's docstring for the root cause
+this fixes (a client disconnect, a tab navigation, or a hosting platform's
+own proxy timeout used to silently kill a still-progressing refresh, with
+the "Refreshing…" state living only in local React state so navigating away
+and back made a genuinely-still-running refresh look like it had done
+nothing). POST /api/refresh returns immediately once the job is started (or
+immediately reports one is already running); GET /api/refresh/status is what
+the frontend polls for real progress and an ETA, independent of who
+started the job or which page is currently open.
 """
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 
 from engine import data_pipeline as pipeline
+from engine import refresh_jobs
 from db import database_engine as db
 
 from ._util import default_user_id
@@ -21,18 +26,60 @@ from models.schemas import RefreshRequest, TradeCloseRequest, TradeOpenRequest
 router = APIRouter()
 
 
+def _estimate_total(body: RefreshRequest) -> int:
+    """Best-effort ticker count for the initial ETA denominator — refined
+    automatically once refresh_jobs sees real progress (see get_status's
+    done/elapsed rate), so an approximate starting guess here is fine."""
+    if body.tickers:
+        return len(body.tickers)
+    try:
+        if body.market.upper() == "US":
+            from providers import us_data_provider as usdp
+
+            return len(usdp.load_universe())
+        from providers import nse_data_provider as nse
+
+        return len(nse.load_universe()) if body.full_universe else len(nse.BOOTSTRAP_TICKERS)
+    except Exception:
+        return 200  # generic fallback — only affects the ETA display, not the refresh itself
+
+
 @router.post("/refresh")
 def post_refresh(body: RefreshRequest):
     uid = default_user_id(body.user_id)
-    if body.market.upper() == "US":
-        return pipeline.refresh_us_verified_live(tickers=body.tickers, user_id=uid)
-    result = pipeline.refresh_verified_live(
-        tickers=body.tickers,
-        user_id=uid,
-        full_universe=body.full_universe,
-        with_fundamentals=body.with_fundamentals,
-    )
-    return result
+    market = body.market.upper()
+
+    # refresh_jobs.start() is itself race-safe (atomic check-and-set under
+    # its own lock) — this is_running() check is purely a fast path to skip
+    # _estimate_total()'s real I/O (load_universe()) when it isn't needed,
+    # not something correctness depends on.
+    if not refresh_jobs.is_running(market):
+        total_estimate = _estimate_total(body)
+        if market == "US":
+            refresh_jobs.start(
+                market, total_estimate, pipeline.refresh_us_verified_live, tickers=body.tickers, user_id=uid,
+            )
+        else:
+            refresh_jobs.start(
+                market,
+                total_estimate,
+                pipeline.refresh_verified_live,
+                tickers=body.tickers,
+                user_id=uid,
+                full_universe=body.full_universe,
+                with_fundamentals=body.with_fundamentals,
+            )
+    # By the time start() returns, the job's own status is already "running"
+    # (set synchronously before the background thread is spawned) whether it
+    # was just started or was already running — that single field is enough
+    # for the frontend to know "go start polling", no separate started/
+    # already_running wrapper needed.
+    return refresh_jobs.get_status(market)
+
+
+@router.get("/refresh/status")
+def get_refresh_status(market: str = Query("IN", pattern="^(?i)(IN|US)$")):
+    return refresh_jobs.get_status(market.upper())
 
 
 @router.post("/trade")

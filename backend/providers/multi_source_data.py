@@ -277,7 +277,13 @@ def fetch_screener(ticker: str) -> Dict[str, Any]:
     # never invent them.
     out["net_debt_ebitda"] = None
     out["interest_coverage"] = None
-    out["promoter_pledge_pct"] = 0.0 if out.get("promoter_holding_pct") is not None else None
+    # Screener's summary grid has no pledge figure at all — it was being
+    # defaulted to 0.0 ("clean, no pledging") purely because holding % was
+    # present, fabricating a pass on the checklist's pledge item for stocks
+    # that were never actually checked. Never invent it; NSE's own SAST
+    # filing (fetch_verified_fundamentals' nse_pledge) is the only real
+    # source for this field.
+    out["promoter_pledge_pct"] = None
     return out
 
 
@@ -330,11 +336,11 @@ def fetch_verified_fundamentals(ticker: str) -> Dict[str, Any]:
     holding = _num(nse_filings.get("promoter_holding_pct")) if nse_filings.get("ok") else None
     if holding is None and screener.get("ok"):
         holding = _num(screener.get("promoter_holding_pct"))
-    if nse_pledge is not None:
-        pledge_value = nse_pledge
-    else:
-        scr_pledge = screener.get("promoter_pledge_pct") if screener.get("ok") else None
-        pledge_value = scr_pledge if scr_pledge is not None else (0.0 if holding is not None else None)
+    # Screener never actually carries a pledge figure (see fetch_screener) —
+    # NSE's SAST filing is the only real source, so an unfetched/failed NSE
+    # call correctly leaves this None (unverified) rather than a fabricated
+    # "clean" default.
+    pledge_value = nse_pledge
 
     screener_core_ok = screener.get("ok") and _num(screener.get("pe_ratio")) is not None and (
         _num(screener.get("roe")) is not None or _num(screener.get("roic")) is not None

@@ -25,6 +25,8 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
+from providers import _retry
+
 logger = logging.getLogger(__name__)
 
 # This file lives in backend/providers/ — cache files live in backend/data/,
@@ -189,10 +191,11 @@ def ensure_swing_universe() -> List[str]:
 
 
 def _session_get(url: str, timeout: Optional[int] = None) -> Optional[Any]:
-    """HTTP GET via curl_cffi (Chrome impersonation) with polite pacing.
-
-    Lock is only held for rate-limit bookkeeping — never during the network call —
-    so parallel ticker loads can actually run concurrently.
+    """HTTP GET via curl_cffi (Chrome impersonation) with polite pacing and
+    a real retry-with-backoff for transient failures (timeout, connection
+    reset, 429/5xx) — see providers/_retry.py for why this exists. Still
+    gives up immediately (no retry) on a non-transient 4xx: that's the
+    source correctly saying no, not a hiccup worth repeating.
     """
     global _LAST_REQUEST_TS, SSL_VERIFY
     timeout = HTTP_TIMEOUT if timeout is None else timeout
@@ -219,38 +222,44 @@ def _session_get(url: str, timeout: Optional[int] = None) -> Optional[Any]:
             },
         )
 
-    # Pace without serializing the full request
-    with _HTTP_LOCK:
-        gap = time.time() - _LAST_REQUEST_TS
-        wait = (_MIN_GAP_SEC - gap) if gap < _MIN_GAP_SEC else 0.0
-        if wait <= 0:
-            _LAST_REQUEST_TS = time.time()
-    if wait > 0:
-        time.sleep(wait)
+    def _attempt():
+        # Nested function assigning to these module globals needs its own
+        # `global` declaration — the outer function's declaration doesn't
+        # reach into a nested scope. Missing this on _LAST_REQUEST_TS turned
+        # every single call into an immediate UnboundLocalError (any read
+        # before the pacing block's own assignment falls to a local that was
+        # never set) — retry_call dutifully retried it 3 times, every time,
+        # for every ticker, which is what actually made a refresh crawl.
+        global _LAST_REQUEST_TS, SSL_VERIFY
+        # Pace without serializing the full request
         with _HTTP_LOCK:
-            _LAST_REQUEST_TS = time.time()
+            gap = time.time() - _LAST_REQUEST_TS
+            wait = (_MIN_GAP_SEC - gap) if gap < _MIN_GAP_SEC else 0.0
+            if wait <= 0:
+                _LAST_REQUEST_TS = time.time()
+        if wait > 0:
+            time.sleep(wait)
+            with _HTTP_LOCK:
+                _LAST_REQUEST_TS = time.time()
 
-    try:
-        resp = _do(SSL_VERIFY)
-        if resp.status_code >= 400:
-            logger.warning("HTTP %s for %s", resp.status_code, url[:90])
-            return None
-        return resp
-    except Exception as exc:
-        msg = str(exc).lower()
-        if SSL_VERIFY and ("ssl" in msg or "certificate" in msg):
-            try:
+        try:
+            resp = _do(SSL_VERIFY)
+        except Exception as exc:
+            msg = str(exc).lower()
+            if SSL_VERIFY and ("ssl" in msg or "certificate" in msg):
                 logger.warning("SSL verify failed — retrying with MEDALLION_SSL_VERIFY=0")
                 SSL_VERIFY = False
                 resp = _do(False)
-                if resp.status_code >= 400:
-                    return None
-                return resp
-            except Exception as exc2:
-                logger.warning("HTTP failed %s: %s", url[:90], exc2)
-                return None
-        logger.warning("HTTP failed %s: %s", url[:90], exc)
-        return None
+            else:
+                raise  # transient network/timeout error — worth retrying
+        if resp.status_code >= 400:
+            if resp.status_code in _retry.RETRIABLE_STATUS_CODES:
+                raise RuntimeError(f"HTTP {resp.status_code}")
+            logger.warning("HTTP %s for %s", resp.status_code, url[:90])
+            return None
+        return resp
+
+    return _retry.retry_call(_attempt, label=f"GET {url[:70]}")
 
 
 def _parse_chart_payload(payload: Dict[str, Any]) -> pd.DataFrame:
@@ -294,10 +303,19 @@ def _fetch_ohlcv_yfinance(ticker: str, range_param: str = "1y", interval: str = 
     }
     period = period_map.get(range_param, "1y")
     for symbol in yahoo_symbol_candidates(ticker):
+        def _attempt(_symbol=symbol):
+            h = yf.Ticker(_symbol).history(period=period, interval=interval, auto_adjust=True)
+            if h is None or h.empty:
+                raise RuntimeError("empty history")  # could be a transient blip, worth a retry
+            return h
+
+        # attempts=2 (not the usual 3) — already looped across multiple
+        # candidate symbols (.NS/.BO), so full-retrying every candidate
+        # would multiply latency for a ticker that's just genuinely delisted.
+        hist = _retry.retry_call(_attempt, attempts=2, label=f"yfinance {symbol}")
+        if hist is None:
+            continue
         try:
-            hist = yf.Ticker(symbol).history(period=period, interval=interval, auto_adjust=True)
-            if hist is None or hist.empty:
-                continue
             idx = pd.to_datetime(hist.index)
             try:
                 if getattr(idx, "tz", None) is not None:
@@ -437,10 +455,19 @@ def _rsi(closes: pd.Series, period: int = 14) -> float:
     loss = -delta.clip(upper=0.0)
     avg_gain = gain.rolling(period).mean()
     avg_loss = loss.rolling(period).mean()
-    rs = avg_gain / avg_loss.replace(0, np.nan)
-    rsi = 100.0 - (100.0 / (1.0 + rs))
-    val = float(rsi.iloc[-1])
-    return 50.0 if math.isnan(val) else round(val, 2)
+    last_gain = float(avg_gain.iloc[-1])
+    last_loss = float(avg_loss.iloc[-1])
+    if math.isnan(last_gain) or math.isnan(last_loss):
+        return 50.0
+    if last_loss == 0:
+        # Zero down-days in the window (a real breakout pattern this
+        # screener is built to surface) used to divide-by-zero into NaN and
+        # collapse to a "neutral" 50 — the mathematically correct RSI here
+        # is 100 (maximum overbought), unless the price was also fully flat
+        # (no gains either), which genuinely is an undefined/neutral read.
+        return 100.0 if last_gain > 0 else 50.0
+    rsi = 100.0 - (100.0 / (1.0 + last_gain / last_loss))
+    return round(rsi, 2)
 
 
 def _atr(frame: pd.DataFrame, period: int = 14) -> float:
