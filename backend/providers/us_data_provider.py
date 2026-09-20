@@ -33,9 +33,11 @@ import logging
 import os
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import pandas as pd
+
+from providers import _retry
 
 logger = logging.getLogger(__name__)
 
@@ -171,20 +173,25 @@ _CONCEPT_CANDIDATES: Dict[str, List[str]] = {
 def _fetch_companyfacts(cik: int) -> Optional[Dict[str, Any]]:
     try:
         import requests
-
-        cik_padded = str(int(cik)).zfill(10)
-        resp = requests.get(
-            f"https://data.sec.gov/api/xbrl/companyfacts/CIK{cik_padded}.json",
-            headers=SEC_HEADERS,
-            timeout=20,
-            verify=_ssl_verify(),
-        )
-        if resp.status_code != 200:
-            return None
-        return resp.json()
-    except Exception as exc:
-        logger.debug("EDGAR companyfacts fetch failed for CIK %s: %s", cik, exc)
+    except ImportError:
         return None
+
+    cik_padded = str(int(cik)).zfill(10)
+    url = f"https://data.sec.gov/api/xbrl/companyfacts/CIK{cik_padded}.json"
+
+    def _attempt():
+        resp = requests.get(url, headers=SEC_HEADERS, timeout=20, verify=_ssl_verify())
+        if resp.status_code != 200:
+            if resp.status_code in _retry.RETRIABLE_STATUS_CODES:
+                raise RuntimeError(f"HTTP {resp.status_code}")
+            return None
+        return resp.json()  # a truncated/dropped response also raises here — worth retrying
+
+    # This is the ONLY fundamentals source for US tickers (no second free
+    # source the way India has NSE filings as a fallback) — a transient SEC
+    # rate-limit or timeout used to permanently blank a stock's ROE/PE/debt
+    # checklist for that refresh with no retry at all.
+    return _retry.retry_call(_attempt, label=f"SEC companyfacts CIK{cik_padded}")
 
 
 def _latest_point(facts: Dict[str, Any], tag: str) -> Optional[Dict[str, Any]]:
@@ -407,10 +414,25 @@ def fetch_edgar_fundamentals(cik: int) -> Dict[str, Any]:
 def fetch_ohlcv(ticker: str, period: str = "1y", interval: str = "1d") -> Optional[pd.DataFrame]:
     try:
         import yfinance as yf
+    except ImportError:
+        return None
 
-        hist = yf.Ticker(normalize_ticker(ticker)).history(period=period, interval=interval)
-        if hist is None or hist.empty:
-            return None
+    symbol = normalize_ticker(ticker)
+
+    def _attempt():
+        h = yf.Ticker(symbol).history(period=period, interval=interval)
+        if h is None or h.empty:
+            raise RuntimeError("empty history")  # could be a transient blip, worth a retry
+        return h
+
+    # This is the ONLY price source for US tickers (no Angel-One-style
+    # second live feed the way India has) — a transient Yahoo rate-limit or
+    # timeout used to permanently blank a stock's price/technicals for that
+    # refresh with no retry at all.
+    hist = _retry.retry_call(_attempt, label=f"yfinance OHLCV {symbol}")
+    if hist is None:
+        return None
+    try:
         frame = hist.rename(
             columns={"Open": "open", "High": "high", "Low": "low", "Close": "close", "Volume": "volume"}
         )
@@ -422,7 +444,7 @@ def fetch_ohlcv(ticker: str, period: str = "1y", interval: str = "1d") -> Option
         frame = frame[frame["close"].notna()]
         return frame if not frame.empty else None
     except Exception as exc:
-        logger.debug("US OHLCV fetch failed for %s: %s", ticker, exc)
+        logger.debug("US OHLCV post-processing failed for %s: %s", ticker, exc)
         return None
 
 
@@ -528,7 +550,11 @@ def build_live_row(ticker: str, bench_frame: Optional[pd.DataFrame] = None) -> O
     return row
 
 
-def refresh_universe(tickers: Optional[List[str]] = None, max_workers: int = 8) -> Dict[str, Any]:
+def refresh_universe(
+    tickers: Optional[List[str]] = None,
+    max_workers: int = 8,
+    progress_cb: Optional[Callable[[int, Optional[int], Optional[str]], None]] = None,
+) -> Dict[str, Any]:
     """Real, live refresh for the US universe — price + technicals (Yahoo)
     and fundamentals (SEC EDGAR) for every symbol, scored through
     factor_engine_us, then handed back for the caller to persist.
@@ -537,6 +563,10 @@ def refresh_universe(tickers: Optional[List[str]] = None, max_workers: int = 8) 
     roughly 10 requests/sec against data.sec.gov; 8 concurrent workers,
     each doing one companyfacts call per ticker, stays comfortably under
     that even with Yahoo's OHLCV call layered on top of each worker).
+
+    progress_cb(done, total, message), when given, is called as tickers
+    complete — see engine/data_pipeline.refresh_us_verified_live and
+    engine/refresh_jobs.py for why (background-job progress/ETA).
     """
     import time as _time
     from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -570,9 +600,14 @@ def refresh_universe(tickers: Optional[List[str]] = None, max_workers: int = 8) 
             # composite figures like 106.5 that look broken next to a bar
             # already defensively capped at 100% width.
             row["composite_pct"] = card["composite_pct"]
+            # A missing/zero 200 SMA must not read as "price > 0", which was
+            # trivially true for any real price and flagged is_buyable=1 for
+            # a stock whose trend was never actually confirmed — same root
+            # cause as the fix in factor_engine.py's checklist item.
+            sma_200 = row.get("sma_200") or 0
             row["is_buyable"] = (
                 1
-                if row["close_price"] > row["sma_200"] and row["rsi_14"] <= 65
+                if sma_200 > 0 and row["close_price"] > sma_200 and row["rsi_14"] <= 65
                 else 0
             )
             row["last_updated"] = None  # set by upsert_leaderboard_rows' own timestamp default
@@ -580,6 +615,7 @@ def refresh_universe(tickers: Optional[List[str]] = None, max_workers: int = 8) 
         except Exception as exc:
             return sym, None, str(exc)
 
+    done_n = 0
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
         for sym, row, err in pool.map(_one, symbols):
             if row is None:
@@ -587,6 +623,12 @@ def refresh_universe(tickers: Optional[List[str]] = None, max_workers: int = 8) 
                 reasons[sym] = err or "unknown error"
             else:
                 accepted_rows.append(row)
+            done_n += 1
+            if progress_cb and (done_n % 3 == 0 or done_n == len(symbols)):
+                try:
+                    progress_cb(done_n, len(symbols), "Building rows…")
+                except Exception:
+                    pass
 
     # Same once-per-batch peer-PE ranking India's refresh already does (see
     # data_pipeline.refresh_verified_live's identical call) — previously

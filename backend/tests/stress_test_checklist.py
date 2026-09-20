@@ -631,6 +631,135 @@ check(
     _re.sub(r"<.*?>", "", _MULTILINE_H1).strip() != "IIFL Finance Ltd",
 )
 
+print("\n=== 18. Missing/zero 200 SMA must not read as a confirmed uptrend (elite QA sweep, 2026-09-11) ===")
+
+_no_sma200_row = {
+    "close_price": 450.0, "sma_50": 420.0, "rsi_14": 55, "atr_value": 9.0, "alpha_3m": 2.0,
+    # sma_200 deliberately absent — the real-world shape of a row whose
+    # 200-day history hasn't been computed yet.
+}
+_no_sma200_item = next(i for i in fe.evaluate_technical_checklist(_no_sma200_row)["items"] if i["name"] == "Price vs 200 SMA")
+check(
+    "factor_engine: missing 200 SMA is skipped (max_marks=0), not scored as a bullish 10/10",
+    _no_sma200_item["max_marks"] == 0 and _no_sma200_item["marks"] == 0.0 and _no_sma200_item["passed"] is True,
+    f"item={_no_sma200_item}",
+)
+_no_sma200_item_us = next(i for i in feus.evaluate_us_technical_checklist(_no_sma200_row)["items"] if i["name"] == "Price vs 200 SMA")
+check(
+    "factor_engine_us: same missing-200-SMA skip applies to the US checklist",
+    _no_sma200_item_us["max_marks"] == 0 and _no_sma200_item_us["marks"] == 0.0,
+    f"item={_no_sma200_item_us}",
+)
+
+_real_sma200_row = dict(_no_sma200_row, sma_200=400.0)  # close(450) genuinely above 200SMA(400)
+_real_sma200_item = next(i for i in fe.evaluate_technical_checklist(_real_sma200_row)["items"] if i["name"] == "Price vs 200 SMA")
+check(
+    "factor_engine: a REAL 200 SMA still scores the confirmed-uptrend case correctly (fix didn't break the happy path)",
+    _real_sma200_item["marks"] == 10.0 and _real_sma200_item["max_marks"] == 10 and _real_sma200_item["passed"] is True,
+    f"item={_real_sma200_item}",
+)
+
+_buy_gates_missing_sma = pipe.evaluate_buy_signal(
+    {**_no_sma200_row, "ticker": "ZZNOSMA", "data_quality": "SOURCED", "sector": "—"},
+    {}, 999999, market="IN",
+)["gates"]
+_trend_gate = next(g for g in _buy_gates_missing_sma if g["gate"] == "technical_trend")
+check(
+    "evaluate_buy_signal: missing 200 SMA fails the technical_trend gate instead of trivially passing (close > 0.0)",
+    _trend_gate["passed"] is False,
+    f"gate={_trend_gate}",
+)
+
+print("\n=== 19. RSI must not collapse to 'neutral' 50 on a real zero-down-day breakout ===")
+import pandas as _pd
+
+_breakout_closes = _pd.Series([100 + i for i in range(20)], dtype=float)  # strictly up every day
+check(
+    "nse_data_provider._rsi: 20 strictly-up closes (zero down-days) reads as 100 (max overbought), not neutral 50",
+    nse._rsi(_breakout_closes) == 100.0,
+    f"got {nse._rsi(_breakout_closes)}",
+)
+_flat_closes = _pd.Series([100.0] * 20)  # genuinely flat — no gains, no losses
+check(
+    "nse_data_provider._rsi: a genuinely flat 20-day series (no gains OR losses) still reads as neutral 50",
+    nse._rsi(_flat_closes) == 50.0,
+    f"got {nse._rsi(_flat_closes)}",
+)
+
+print("\n=== 20. A genuine 0.0 ROIC must not be silently swapped for ROE (financial-sector fallback) ===")
+_zero_roic_row = {"roic": 0.0, "roe": 22.0, "pe_ratio": 10.0, "data_quality": "SOURCED", "sector": "Banks"}
+_roic_item = next(i for i in fe.evaluate_fundamental_checklist(_zero_roic_row)["items"] if "ROE" in i["name"] or "Capital" in i["name"])
+check(
+    "factor_engine (financial pack): a real 0.0 ROIC scores as the weak-return case, not silently replaced by ROE=22%",
+    "0.0%" in _roic_item["value"],
+    f"item={_roic_item}",
+)
+_zero_roic_row_us = {"roic": 0.0, "roe": 22.0, "pe_ratio": 10.0, "data_quality": "SOURCED", "sector": "Financials"}
+_roic_item_us = next(i for i in feus.evaluate_us_fundamental_checklist(_zero_roic_row_us)["items"] if "ROE" in i["name"])
+check(
+    "factor_engine_us: same 0.0-ROIC-not-swapped-for-ROE fix applies to the US financial pack",
+    "0.0%" in _roic_item_us["value"],
+    f"item={_roic_item_us}",
+)
+
+print("\n=== 21. Background refresh job (Bug fixed 2026-09-18: refresh used to be a single long-lived HTTP request) ===")
+import time as _time
+from engine import refresh_jobs as rj
+
+check(
+    "get_status on a market with no job ever started reads as idle, not an error",
+    rj.get_status("ZZ_NEVER_STARTED")["status"] == "idle",
+)
+
+
+def _fake_job_3steps(progress_cb=None, **kw):
+    for i in range(1, 4):
+        if progress_cb:
+            progress_cb(i, 3, f"step {i}")
+        _time.sleep(0.03)
+    return {"message": "fake job done", "accepted": 3}
+
+
+started = rj.start("ZZTEST", 3, _fake_job_3steps)
+check("start() returns True for a fresh job", started is True)
+check("is_running() is True immediately after start", rj.is_running("ZZTEST"))
+_time.sleep(0.015)
+mid_status = rj.get_status("ZZTEST")
+check(
+    "get_status mid-run reports 'running' with real done/total, not a placeholder",
+    mid_status["status"] == "running" and mid_status["total"] == 3,
+    f"mid_status={mid_status}",
+)
+started_again = rj.start("ZZTEST", 3, _fake_job_3steps)
+check(
+    "start() while already running returns False instead of launching a duplicate/overlapping job",
+    started_again is False,
+)
+_time.sleep(0.25)
+done_status = rj.get_status("ZZTEST")
+check(
+    "job reaches 'done' with the real result carried through, and eta_sec clears once finished",
+    done_status["status"] == "done" and done_status["result"]["accepted"] == 3 and done_status["eta_sec"] is None,
+    f"done_status={done_status}",
+)
+started_after_done = rj.start("ZZTEST", 3, _fake_job_3steps)
+check("start() after a prior job finished is allowed to start a new one", started_after_done is True)
+_time.sleep(0.2)
+
+
+def _fake_job_fails(progress_cb=None, **kw):
+    raise RuntimeError("simulated provider outage")
+
+
+rj.start("ZZTEST_ERR", 1, _fake_job_fails)
+_time.sleep(0.05)
+err_status = rj.get_status("ZZTEST_ERR")
+check(
+    "a job whose function raises is reported as status='error' with the real exception message, not silently dropped",
+    err_status["status"] == "error" and "simulated provider outage" in (err_status["error"] or ""),
+    f"err_status={err_status}",
+)
+
 print("\n" + "=" * 60)
 print(f"STRESS TEST SUMMARY: {PASS}/{PASS + FAIL} PASSED | {FAIL} FAILED")
 if FINDINGS:

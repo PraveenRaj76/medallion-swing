@@ -163,8 +163,12 @@ def evaluate_fundamental_checklist(row: Any) -> Dict[str, Any]:
         )
 
     if financial:
-        # Banks / NBFC / insurance — ROCE-style efficiency, else the filed ROE
-        roe = _optional(row, "roic") or _optional(row, "roe")
+        # Banks / NBFC / insurance — ROCE-style efficiency, else the filed ROE.
+        # `or` would silently drop a genuine 0.0 ROIC (falsy) in favor of the
+        # ROE fallback — an explicit None-check is required so a real
+        # break-even reading isn't swapped out for a different metric.
+        roic_val = _optional(row, "roic")
+        roe = roic_val if roic_val is not None else _optional(row, "roe")
         if roe is None or quality == "MISSING":
             items.append(_item("ROE / Capital return", "—", 0.0, 10, False, "Return metric missing for financial."))
         elif roe >= 15:
@@ -537,13 +541,21 @@ def evaluate_technical_checklist(row: Any, history: Optional[pd.DataFrame] = Non
     alpha = _f(row, "alpha_3m")
     delivery = _optional(row, "delivery_pct_10d")
 
-    if close > sma200:
-        m, ok, note = 10.0, True, "Price above 200-day SMA — primary uptrend intact."
+    if sma200 <= 0:
+        # _f() defaults a missing/NaN sma_200 to 0.0 — without this guard
+        # "close > sma200" is trivially true for any positive price, scoring
+        # a stock with no real 200-day history as a confirmed uptrend.
+        value, m, max_m, ok, note = (
+            "N/A (200 SMA unavailable)", 0.0, 0, True,
+            "Skipped — 200-day SMA not available for this row yet; does not block the name.",
+        )
+    elif close > sma200:
+        value, m, max_m, ok, note = f"₹{close:.2f} vs ₹{sma200:.2f}", 10.0, 10, True, "Price above 200-day SMA — primary uptrend intact."
     elif close > sma200 * 0.98:
-        m, ok, note = 5.0, False, "Near 200 SMA — trend contested."
+        value, m, max_m, ok, note = f"₹{close:.2f} vs ₹{sma200:.2f}", 5.0, 10, False, "Near 200 SMA — trend contested."
     else:
-        m, ok, note = 0.0, False, "Below 200 SMA — primary trend down / weak."
-    items.append(_item("Price vs 200 SMA", f"₹{close:.2f} vs ₹{sma200:.2f}", m, 10, ok, note))
+        value, m, max_m, ok, note = f"₹{close:.2f} vs ₹{sma200:.2f}", 0.0, 10, False, "Below 200 SMA — primary trend down / weak."
+    items.append(_item("Price vs 200 SMA", value, m, max_m, ok, note))
 
     if sma50 > 0 and close > sma50:
         m, ok, note = 6.0, True, "Price above 50-day SMA — intermediate trend supportive."

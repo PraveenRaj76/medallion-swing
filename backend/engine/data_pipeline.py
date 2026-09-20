@@ -11,7 +11,9 @@ import math
 import os
 import time
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
+
+ProgressCb = Optional[Callable[[int, Optional[int], Optional[str]], None]]
 
 import numpy as np
 import pandas as pd
@@ -140,7 +142,11 @@ def refresh_screener_quotes(
                         "yoy_profit_growth",
                         "fundamental_score",
                     ):
-                        if prior.get(key) is not None:
+                        # prior is a raw pandas Series (db.get_ticker_row) —
+                        # a NULL numeric column reads back as numpy.nan, not
+                        # None, so "is not None" alone lets NaN through into
+                        # the row and back into the DB on the next upsert.
+                        if pd.notna(prior.get(key)):
                             row[key] = prior.get(key)
                     row["technical_score"] = nse._score_technical(row)
                     row["composite_score"] = round(
@@ -1129,10 +1135,23 @@ def refresh_verified_live(
     full_universe: bool = True,
     with_ohlcv: bool = True,
     with_fundamentals: bool = False,
+    progress_cb: ProgressCb = None,
 ) -> Dict[str, Any]:
-    """Refresh latest live CMP for full swing universe (Groww/MC/Yahoo)."""
+    """Refresh latest live CMP for full swing universe (Groww/MC/Yahoo).
+
+    progress_cb(done, total, message), when given, is called periodically
+    so a caller (see routes/refresh.py + engine/refresh_jobs.py) can report
+    real progress/ETA on a refresh running in a background thread — optional
+    so direct callers (tests, other pipeline code) are unaffected."""
     from concurrent.futures import ThreadPoolExecutor, as_completed
     from providers import live_price_feed as lpf
+
+    def _report(done: int, total: Optional[int] = None, message: Optional[str] = None) -> None:
+        if progress_cb:
+            try:
+                progress_cb(done, total, message)
+            except Exception:
+                pass  # progress reporting must never break the actual refresh
 
     result: Dict[str, Any] = {
         "attempted": 0,
@@ -1190,6 +1209,7 @@ def refresh_verified_live(
 
     result["attempted"] = len(symbols)
     t0 = time.time()
+    _report(0, len(symbols), f"Fetching live prices for {len(symbols)} stocks…")
     try:
         quotes = lpf.fetch_live_quotes_batch(symbols, max_workers=16)
         price_ok = sum(1 for q in quotes.values() if q.get("ok"))
@@ -1218,17 +1238,17 @@ def refresh_verified_live(
                         hist_map[sym] = frame
                         ohlcv_ok += 1
         result["ohlcv_ok"] = ohlcv_ok
+        _report(0, len(symbols), f"Prices {price_ok}/{len(symbols)}, OHLCV {ohlcv_ok} — building rows…")
 
         accepted_rows: List[Dict[str, Any]] = []
         rejected: List[str] = []
         reasons: Dict[str, str] = {}
         bench_ok = bench is not None and not getattr(bench, "empty", True)
-        for sym in symbols:
+
+        def _build_row(sym: str) -> Tuple[str, Optional[Dict[str, Any]], Optional[str]]:
             q = quotes.get(sym) or {}
             if not q.get("ok"):
-                rejected.append(sym)
-                reasons[sym] = "no price (LTP or prev close)"
-                continue
+                return sym, None, "no price (LTP or prev close)"
             prior = db.get_ticker_row(sym)
             prior_dict = prior.to_dict() if prior is not None else None
             hist = hist_map.get(sym)
@@ -1250,10 +1270,32 @@ def refresh_verified_live(
                     sym, q, prior=prior_dict, hist=hist, bench=bench if bench_ok else None
                 )
             if row and row_has_live_price(row):
-                accepted_rows.append(row)
-            else:
-                rejected.append(sym)
-                reasons[sym] = "row build failed"
+                return sym, row, None
+            return sym, None, "row build failed"
+
+        # Previously a strictly serial "for sym in symbols" loop — with
+        # with_fundamentals=True (what the UI's Refresh button always sends)
+        # each iteration is a full Screener.in scrape (several HTTP round
+        # trips), so 200 tickers one at a time was the single largest
+        # contributor to multi-minute-plus refreshes. Screener.in's own
+        # request pacing (nse_data_provider._session_get's rate-limit lock)
+        # still throttles the real outbound requests to the same safe rate
+        # regardless of how many threads call it, so parallelizing here only
+        # overlaps waiting/CPU time across tickers — it does not hammer the
+        # source any harder than the serial version did.
+        max_workers = 8 if with_fundamentals else 12
+        done_n = 0
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            for fut in as_completed([pool.submit(_build_row, s) for s in symbols]):
+                sym, row, err = fut.result()
+                if row is not None:
+                    accepted_rows.append(row)
+                else:
+                    rejected.append(sym)
+                    reasons[sym] = err or "unknown error"
+                done_n += 1
+                if done_n % 3 == 0 or done_n == len(symbols):
+                    _report(done_n, len(symbols), "Building rows…")
 
         # Peer-relative PE percentile only means anything computed across the
         # whole batch at once (rank against sector-pack peers), so this runs
@@ -1271,6 +1313,7 @@ def refresh_verified_live(
             if peer_df is not None and "pe_peer_percentile" in peer_df.columns:
                 accepted_rows = peer_df.to_dict("records")
 
+        _report(len(symbols), len(symbols), f"Saving {len(accepted_rows)} stocks…")
         for i in range(0, len(accepted_rows), 50):
             db.upsert_leaderboard_rows(accepted_rows[i : i + 50])
 
@@ -1307,7 +1350,11 @@ def refresh_verified_live(
     return result
 
 
-def refresh_us_verified_live(tickers: Optional[List[str]] = None, user_id: Optional[int] = None) -> Dict[str, Any]:
+def refresh_us_verified_live(
+    tickers: Optional[List[str]] = None,
+    user_id: Optional[int] = None,
+    progress_cb: ProgressCb = None,
+) -> Dict[str, Any]:
     """Real, live US refresh — SEC EDGAR fundamentals + Yahoo Finance
     price/technicals, scored through factor_engine_us, then saved with
     market='US'. Mirrors refresh_verified_live's shape (attempted/accepted/
@@ -1325,9 +1372,14 @@ def refresh_us_verified_live(tickers: Optional[List[str]] = None, user_id: Optio
         "market": "US",
     }
     try:
-        outcome = usdp.refresh_universe(tickers=tickers)
+        outcome = usdp.refresh_universe(tickers=tickers, progress_cb=progress_cb)
         rows = outcome.pop("rows", [])
         result.update(outcome)
+        if progress_cb:
+            try:
+                progress_cb(result.get("attempted", 0), result.get("attempted", 0), f"Saving {len(rows)} stocks…")
+            except Exception:
+                pass
         for i in range(0, len(rows), 50):
             db.upsert_leaderboard_rows(rows[i : i + 50])
         try:
@@ -1660,11 +1712,20 @@ def evaluate_buy_signal(
     close = float(row.get("close_price") or 0.0)
     sma_200 = float(row.get("sma_200") or 0.0)
     rsi_14 = float(row.get("rsi_14") or 50.0)
-    trend_ok = close > sma_200 and rsi_14 <= RSI_OVERBOUGHT
+    # A missing/zero 200 SMA must fail this gate, not pass it — "close > 0"
+    # is trivially true for any real price, which used to wave through a
+    # BUY on a stock whose trend was never actually confirmed (same root
+    # cause fixed in factor_engine.evaluate_technical_checklist).
+    if sma_200 <= 0:
+        trend_ok = False
+        detail = f"close={close:.2f}, 200SMA unavailable — trend not confirmed"
+    else:
+        trend_ok = close > sma_200 and rsi_14 <= RSI_OVERBOUGHT
+        detail = f"close={close:.2f} vs 200SMA={sma_200:.2f}, RSI={rsi_14:.1f}"
     gates.append({
         "gate": "technical_trend",
         "passed": trend_ok,
-        "detail": f"close={close:.2f} vs 200SMA={sma_200:.2f}, RSI={rsi_14:.1f}",
+        "detail": detail,
     })
 
     regime = get_market_regime(market)

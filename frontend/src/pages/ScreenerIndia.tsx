@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type CSSProperties } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { ApiError, getScreener, getSectors, postRefresh } from '../api/client'
+import { ApiError, getScreener, getSectors } from '../api/client'
 import type { ScreenerResponse, ScreenerRow, SectorsResponse } from '../types'
 import { useAuth } from '../context/AuthContext'
 import { qualityPill, Pill } from '../components/Pill'
@@ -10,6 +10,7 @@ import { ChecklistExplainer } from '../components/ChecklistExplainer'
 import { CountUp } from '../components/CountUp'
 import { FUNDAMENTAL_EXPLAINERS, TECHNICAL_EXPLAINERS, SECTOR_EXPLAINERS } from '../data/checklistExplainers'
 import { useSort } from '../hooks/useSort'
+import { formatEta, useRefreshJob } from '../hooks/useRefreshJob'
 
 function median(nums: number[]): number | null {
   if (!nums.length) return null
@@ -22,7 +23,6 @@ export function ScreenerIndia() {
   const [view, setView] = useState<'leaderboard' | 'best-sector'>('leaderboard')
   const [data, setData] = useState<ScreenerResponse | null>(null)
   const [loading, setLoading] = useState(true)
-  const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [search, setSearch] = useState('')
   const [sectorFilter, setSectorFilter] = useState('')
@@ -47,21 +47,13 @@ export function ScreenerIndia() {
     load()
   }, [])
 
-  async function handleRefresh() {
-    setRefreshing(true)
-    setError(null)
-    try {
-      await postRefresh({ full_universe: true, with_fundamentals: true, user_id: userId ?? undefined })
-      await load()
-    } catch (err) {
-      setError(
-        err instanceof ApiError
-          ? err.message
-          : 'Refresh timed out or failed — a full 200-stock pull can take several minutes; try again.',
-      )
-    } finally {
-      setRefreshing(false)
-    }
+  // Runs as a real background job on the server — see useRefreshJob. Clicking
+  // Refresh, then navigating to another page, no longer loses track of it:
+  // coming back to this page re-asks the server for the job's real status.
+  const refreshJob = useRefreshJob('IN', load)
+  const refreshing = refreshJob.running
+  function handleRefresh() {
+    refreshJob.start({ full_universe: true, with_fundamentals: true, user_id: userId ?? undefined, market: 'IN' })
   }
 
   const rows = data?.data ?? []
@@ -135,9 +127,18 @@ export function ScreenerIndia() {
         </div>
       </div>
 
-      {error && (
+      {(error || refreshJob.error) && (
         <div className="section" style={{ marginTop: 20 }}>
-          <div className="pill loss">{error}</div>
+          <div className="pill loss">{error || refreshJob.error}</div>
+        </div>
+      )}
+      {refreshing && refreshJob.status && (
+        <div className="section" style={{ marginTop: 20 }}>
+          <div className="pill" style={{ background: 'var(--gold-dim)', color: 'var(--gold)' }}>
+            {refreshJob.status.message}
+            {refreshJob.status.total > 0 && ` (${refreshJob.status.done}/${refreshJob.status.total})`}
+            {formatEta(refreshJob.status.eta_sec) && ` — ${formatEta(refreshJob.status.eta_sec)}`}
+          </div>
         </div>
       )}
 

@@ -84,7 +84,18 @@ def _build_quote(row: Dict[str, Any], market: str, ticker: str) -> Dict[str, Any
                     "fetched_at": live.get("fetched_at"),
                 }
             )
-            if ohlcv_price is not None and live_price is not None:
+            # 2026-09-11: this used to fire on live.get("ok") alone. When
+            # Angel One isn't configured/reachable, fetch_live_quote silently
+            # falls back to live_price_feed._fetch_yahoo_quotes_batch — which
+            # itself just calls nse_data_provider.fetch_ohlcv again, the same
+            # underlying source as `close`/ohlcv_price above. That produced a
+            # "cross-check" comparing Yahoo against Yahoo (two fetches at
+            # different times, not two independent sources), labeled with a
+            # confident agrees/disagrees verdict that was really just
+            # reporting how stale the cached `row` price was — misleading in
+            # the exact way this feature exists to prevent. Only build a
+            # cross-check when the second reading is genuinely Angel One.
+            if live.get("source") == "angelone" and ohlcv_price is not None and live_price is not None:
                 try:
                     ohlcv_price_f = float(ohlcv_price)
                     live_price_f = float(live_price)

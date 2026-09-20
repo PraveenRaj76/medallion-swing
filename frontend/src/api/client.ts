@@ -1,6 +1,7 @@
 import type {
   ForwardTestResponse,
   ProfileResponse,
+  RefreshStatus,
   ScreenerResponse,
   SectorsResponse,
 } from '../types'
@@ -100,6 +101,12 @@ export function getForwardTest(userId: number, market: 'IN' | 'US' = 'IN') {
   return request<ForwardTestResponse>(`/api/forward-test?user_id=${userId}&market=${market}`)
 }
 
+// Starts (or joins an already-running) background refresh job and returns
+// immediately — it does NOT wait for the refresh to finish. The response's
+// `status` is already 'running' (the job's own real status right after
+// start() returns) so the caller knows to start polling getRefreshStatus;
+// see RefreshStatus for why this is server-side state rather than
+// something tracked only while this request is in flight.
 export function postRefresh(body: {
   tickers?: string[]
   full_universe?: boolean
@@ -107,10 +114,14 @@ export function postRefresh(body: {
   market?: 'IN' | 'US'
   user_id?: number
 }) {
-  return request<Record<string, unknown>>('/api/refresh', {
+  return request<RefreshStatus>('/api/refresh', {
     method: 'POST',
     body: JSON.stringify(body),
   })
+}
+
+export function getRefreshStatus(market: 'IN' | 'US' = 'IN') {
+  return request<RefreshStatus>(`/api/refresh/status?market=${market}`)
 }
 
 export function postOpenTrade(body: {

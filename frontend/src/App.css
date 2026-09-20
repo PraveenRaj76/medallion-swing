@@ -1085,17 +1085,29 @@ td.ticker {
 }
 .about-modal {
   width: 100%;
-  max-width: 480px;
-  max-height: 85vh;
+  max-width: 600px;
+  max-height: 88vh;
   overflow-y: auto;
-  background: var(--bg-2);
+  /* Scrollbar hidden for a cleaner card edge — content still scrolls via
+     wheel/touch on short viewports, the bar itself just isn't drawn. */
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  /* Deliberately translucent (not var(--bg-2) solid) so the blurred
+     leaderboard behind the backdrop still reads faintly through the card —
+     a frosted-glass panel rather than an opaque sheet. */
+  background: rgba(13, 18, 32, 0.82);
+  backdrop-filter: blur(28px) saturate(150%);
+  -webkit-backdrop-filter: blur(28px) saturate(150%);
   border: 1px solid var(--border-2);
   border-radius: var(--radius-lg);
-  box-shadow: 0 40px 100px -20px rgba(0, 0, 0, 0.7);
+  box-shadow: 0 40px 100px -20px rgba(0, 0, 0, 0.7), inset 0 1px 0 rgba(255, 255, 255, 0.06);
   padding: 36px 32px 30px;
   text-align: center;
   position: relative;
   animation: aboutModalIn 0.25s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+.about-modal::-webkit-scrollbar {
+  display: none;
 }
 @keyframes aboutModalIn {
   from {
@@ -1127,53 +1139,44 @@ td.ticker {
   background: var(--surface-4);
   color: var(--text);
 }
-.about-modal-name {
-  font-family: 'Space Grotesk', sans-serif;
-  font-size: 22px;
-  font-weight: 700;
-  letter-spacing: 0.5px;
-  margin-top: 18px;
-  color: var(--gold);
+.about-modal-logo {
+  display: block;
+  width: 100%;
+  max-width: 240px;
+  height: auto;
+  margin: 0 auto;
+  border-radius: var(--radius-md);
+  /* The source image is a solid-black square (not transparent) — a bare
+     <img> here reads as a hard-edged box dropped on the modal's dark navy.
+     A soft gold ring + glow turns that edge into a deliberate frame instead. */
+  box-shadow: 0 0 0 1px var(--gold-dim), 0 0 28px -8px rgba(228, 183, 92, 0.35), 0 14px 34px -14px rgba(0, 0, 0, 0.6);
 }
-.about-modal-tagline {
-  font-size: 12px;
-  text-transform: uppercase;
-  letter-spacing: 1px;
-  color: var(--text-faint);
-  margin-top: 4px;
-}
-.about-modal-body {
+.about-modal-story {
   text-align: left;
   margin-top: 22px;
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 14px;
 }
-.about-modal-row-label {
-  font-size: 10.5px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.6px;
-  color: var(--gold-soft);
-  margin-bottom: 4px;
+.about-modal-greeting {
+  font-size: 14.5px;
+  font-weight: 600;
+  color: var(--text);
+  line-height: 1.5;
+  margin: 0;
 }
-.about-modal-row p {
+.about-modal-story p {
   font-size: 13px;
   line-height: 1.6;
   color: var(--text-dim);
   margin: 0;
 }
-.about-modal-quote {
-  margin-top: 22px;
-  padding-top: 18px;
-  border-top: 1px solid var(--border);
+.about-modal-signoff {
+  text-align: right;
+  margin-top: 14px;
   font-size: 12.5px;
   font-style: italic;
-  color: var(--text-faint);
-}
-.about-modal-quote b {
-  color: var(--gold);
-  font-style: normal;
+  color: var(--gold-soft);
 }
 
 /* LOGIN */
