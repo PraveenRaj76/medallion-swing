@@ -45,115 +45,44 @@ TURSO_TOKEN = os.environ.get("TURSO_AUTH_TOKEN", "").strip()
 USE_TURSO = bool(TURSO_URL and TURSO_TOKEN)
 
 
-class _RowShim:
-    """Mimics sqlite3.Row exactly — NOT a dict subclass. Real sqlite3.Row
-    supports row['col'] and row[0], dict(row) via the keys()+__getitem__
-    mapping protocol, but iterating a row (`for v in row`, or anything that
-    does `tuple(row)`/`list(row)` — including pandas' generic DBAPI2
-    read_sql_query path) yields VALUES in column order, not keys. A plain
-    dict subclass gets this backwards (dict iterates its own keys), which
-    silently corrupts every pd.read_sql_query result against this shim:
-    verified by testing — rows came back as column-name strings instead of
-    the actual data. See sqlite3.Row's real behavior for the contract this
-    must match."""
-
-    def __init__(self, columns: List[str], values: Tuple[Any, ...]):
-        self._columns = columns
-        self._values = list(values)
-
-    def __getitem__(self, key):
-        if isinstance(key, int):
-            return self._values[key]
-        return self._values[self._columns.index(key)]
-
-    def __iter__(self):
-        return iter(self._values)
-
-    def __len__(self):
-        return len(self._values)
-
-    def keys(self):
-        return list(self._columns)
-
-
-class _TursoCursor:
-    """Re-implements the slice of the sqlite3 cursor API this file actually
-    uses (.execute/.fetchone/.fetchall/.rowcount/.lastrowid/.description/
-    .close) on top of the Turso/libSQL client, so every existing query in
-    this file works unchanged. .description and .close were added after
-    finding pd.read_sql_query (6 call sites in this file) requires both —
-    pandas only special-cases real sqlite3.Connection; anything else goes
-    through its generic DBAPI2 path, which calls cursor.description to get
-    column names and cursor.close() when done."""
-
-    def __init__(self, client):
-        self._client = client
-        self._rows: List[_RowShim] = []
-        self._idx = 0
-        self.rowcount = -1
-        self.lastrowid = None
-        self.description: Optional[List[Tuple[Any, ...]]] = None
-
-    def execute(self, sql: str, params: Optional[Any] = None):
-        args = list(params) if params else []
-        rs = self._client.execute(sql, args)
-        columns = list(rs.columns)
-        self._rows = [_RowShim(columns, tuple(r)) for r in rs.rows]
-        self._idx = 0
-        self.rowcount = getattr(rs, "rows_affected", -1)
-        self.lastrowid = getattr(rs, "last_insert_rowid", None)
-        # DBAPI2 description is a 7-tuple per column; only name (index 0) is
-        # meaningful here — the rest describe types Turso doesn't expose.
-        self.description = [(c, None, None, None, None, None, None) for c in columns]
-        return self
-
-    def fetchone(self):
-        if self._idx >= len(self._rows):
-            return None
-        row = self._rows[self._idx]
-        self._idx += 1
-        return row
-
-    def fetchall(self):
-        rows = self._rows[self._idx:]
-        self._idx = len(self._rows)
-        return rows
-
-    def close(self):
-        pass
-
-
 class _TursoConnection:
-    """Drop-in stand-in for sqlite3.Connection covering .cursor/.execute/
-    .commit/.rollback/.close — the only methods this file calls on conn."""
+    """Thin wrapper around turso_serverless.Connection so the rest of this
+    file's conn.cursor()/.execute()/.commit()/.rollback()/.close() call
+    sites don't need to know which backend is active.
+
+    2026-09-21: replaced libsql_client, which was archived by Turso upstream
+    in June 2025 — its old Hrana-over-WebSocket handshake now gets rejected
+    by Turso's current servers with a bare "400 Invalid response status",
+    silently falling back to a fresh local SQLite file every restart (no
+    crash, just quietly not persisting anything). turso_serverless is
+    Turso's current official driver: real DB-API 2.0 (SQL over HTTP, no
+    WebSocket), and its own Row class already matches sqlite3.Row's exact
+    contract (dict-style + positional access, iteration yields values not
+    keys) — the custom _RowShim/_TursoCursor classes this used to need are
+    gone, turso_serverless does that natively. It also gives real
+    commit()/rollback() (implicit per-DML-statement transactions), fixing
+    the prior no-op-commit non-atomicity trade-off called out here before."""
 
     def __init__(self, url: str, auth_token: str):
-        import libsql_client
-        self._client = libsql_client.create_client_sync(url=url, auth_token=auth_token)
+        import turso_serverless
+        self._conn = turso_serverless.connect(url, auth_token=auth_token)
+        self._conn.row_factory = turso_serverless.Row
 
     def cursor(self):
-        return _TursoCursor(self._client)
+        return self._conn.cursor()
 
     def execute(self, sql: str, params: Optional[Any] = None):
-        return self.cursor().execute(sql, params)
+        return self._conn.execute(sql, params or ())
 
     def commit(self):
-        # Turso/libSQL over HTTP commits each statement as it runs — there is
-        # no local multi-statement transaction to flush, so this is a no-op
-        # kept only so existing call sites (conn.commit()) don't break.
-        # KNOWN TRADE-OFF: unlike local sqlite, a multi-step write here is not
-        # atomic — if statement 3 of 5 fails, statements 1-2 are already
-        # persisted (no true rollback). Acceptable for this app's single-user
-        # signal-tracking writes; would NOT be acceptable for money-moving
-        # transactions.
-        pass
+        self._conn.commit()
 
     def rollback(self):
-        pass
+        self._conn.rollback()
 
     def close(self):
         try:
-            self._client.close()
+            self._conn.close()
         except Exception:
             pass
 FIXED_QUANTITY = 1
