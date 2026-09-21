@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import os
+import socket
 
 import math
 from typing import Any
@@ -20,6 +21,19 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 load_dotenv()
+
+# 2026-09-21: turso_serverless (db/database_engine.py's Turso driver) calls
+# urllib.request.urlopen() with no timeout at all — confirmed by reading its
+# source (session.py's Session._post). Observed live: a stalled connection
+# to Turso hung a refresh job for 19+ minutes with zero way to recover,
+# since the request never times out or raises. Can't patch a third-party
+# package's internals, so this sets a process-wide socket default instead —
+# urllib respects it whenever a call doesn't pass its own timeout. Every
+# other network call in this app (curl_cffi, requests, yfinance) already
+# sets its own explicit timeout and is unaffected; this only closes the one
+# real gap. 30s is generous for any single statement against Turso while
+# still bounding the previously-unbounded hang.
+socket.setdefaulttimeout(30)
 
 logging.basicConfig(level=os.environ.get("MEDALLION_LOG_LEVEL", "INFO"))
 logger = logging.getLogger("medallion.api")
