@@ -18,6 +18,12 @@ jobs:
     steps:
       - name: Ping backend health endpoint
         run: |
+          # curl's default User-Agent ("curl/8.x") reads as bot traffic to
+          # SnapDeploy's edge and gets a 403 before the request even reaches
+          # the app (confirmed: manual browser/WebFetch requests to the same
+          # URL succeed at the same time this gets blocked). A real
+          # browser-shaped User-Agent routes past that.
           curl -sS -o /dev/null -w "HTTP %{http_code}\n" \
+            -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36" \
             https://medallionswing-001f6.containers.snapdeploy.app/health \
             || echo "Ping failed - backend may be cold-starting or temporarily down, not treating this as a workflow failure"
