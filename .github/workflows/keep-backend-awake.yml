@@ -1,0 +1,23 @@
+name: Keep backend awake
+
+# SnapDeploy's free tier sleeps the backend container after 15 min with no
+# incoming requests, then takes 30-60s to cold-start the next one. This pings
+# the lightweight /health endpoint every 10 minutes (comfortably under that
+# 15-minute window) so the container always looks "active" and never has a
+# quiet enough gap to sleep. Doesn't touch the database or do any real work -
+# /health exists specifically for cheap checks like this.
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch: {}
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping backend health endpoint
+        run: |
+          curl -sS -o /dev/null -w "HTTP %{http_code}\n" \
+            https://medallionswing-001f6.containers.snapdeploy.app/health \
+            || echo "Ping failed - backend may be cold-starting or temporarily down, not treating this as a workflow failure"
